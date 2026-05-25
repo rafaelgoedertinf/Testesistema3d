@@ -83,6 +83,19 @@ Proxima etapa tecnica:
 3. calibrar escala e medidas sobre o modelo texturizado;
 4. selecionar planos de telhado sobre a malha para posicionar placas.
 
+## Automacao fotovoltaica
+
+O primeiro prototipo de automacao usa uma imagem-base do processamento ODM e candidatos de telhado com poligonos normalizados. A partir do modelo de placa selecionado, o app:
+
+1. escolhe uma area de telhado sugerida;
+2. estima comprimento/largura da area;
+3. calcula orientacao automatica das placas;
+4. respeita recuo e espacamento;
+5. preenche a area com modulos;
+6. permite remover/recolocar modulos com clique.
+
+Essa etapa ainda usa candidatos predefinidos para validar a experiencia comercial. A evolucao sera substituir esses candidatos por deteccao real baseada em ortofoto/nuvem densa.
+
 ### Instalador macOS
 
 O caminho inicial sera empacotar com Electron Builder:

@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
+import AutoSolarPlanner from "./AutoSolarPlanner";
+import type { RoofAnalysis } from "./AutoSolarPlanner";
 import { calculateLayout, calculateScaleFactor } from "./layoutCalculator";
 import PointCloudViewer from "./PointCloudViewer";
 import TexturedModelViewer from "./TexturedModelViewer";
@@ -150,6 +152,7 @@ export default function App() {
   const [reconstructionError, setReconstructionError] = useState("");
   const [isUploadingPhotos, setIsUploadingPhotos] = useState(false);
   const [odmTestStatus, setOdmTestStatus] = useState<OdmTestStatus | null>(null);
+  const [roofAnalysis, setRoofAnalysis] = useState<RoofAnalysis | null>(null);
   const [newPanel, setNewPanel] = useState<Omit<SolarPanel, "id">>({
     manufacturer: "",
     model: "",
@@ -215,6 +218,11 @@ export default function App() {
       .then((response) => readApiResponse<OdmTestStatus>(response))
       .then((status) => setOdmTestStatus(status))
       .catch(() => setOdmTestStatus(null));
+
+    void fetch("/api/odm-test/roof-analysis")
+      .then((response) => readApiResponse<RoofAnalysis>(response))
+      .then((analysis) => setRoofAnalysis(analysis))
+      .catch(() => setRoofAnalysis(null));
   }, []);
 
   function updateProject(field: keyof CustomerProject, value: string) {
@@ -322,6 +330,10 @@ export default function App() {
           <span>{enabledPanelCount} placas ativas no layout atual</span>
         </div>
       </section>
+
+      {roofAnalysis?.available && (
+        <AutoSolarPlanner analysis={roofAnalysis} selectedPanel={selectedPanel} />
+      )}
 
       {odmTestStatus?.available &&
         odmTestStatus.modelUrl &&

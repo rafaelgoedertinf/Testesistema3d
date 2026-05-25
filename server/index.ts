@@ -97,6 +97,60 @@ app.get("/api/odm-test/status", (_request, response) => {
   });
 });
 
+app.get("/api/odm-test/roof-analysis", (_request, response) => {
+  const imagePath = path.join(odmTestRoot, "images", "image_001.jpg");
+
+  if (!existsSync(imagePath)) {
+    response.json({ available: false });
+    return;
+  }
+
+  response.json({
+    available: true,
+    imageUrl: "/api/odm-test/files/images/image_001.jpg",
+    candidates: [
+      {
+        id: "main-roof",
+        name: "Telhado principal detectado",
+        confidence: 0.78,
+        dimensionsMeters: {
+          length: 14.4,
+          width: 8.4,
+        },
+        polygon: [
+          { x: 43.5, y: 15.5 },
+          { x: 75.8, y: 16.5 },
+          { x: 76.8, y: 53.2 },
+          { x: 39.2, y: 55.8 },
+        ],
+        notes: [
+          "Area sugerida automaticamente para validar o fluxo comercial.",
+          "As medidas ainda sao estimadas; a proxima etapa sera calibrar escala real com dois pontos.",
+        ],
+      },
+      {
+        id: "left-roof",
+        name: "Cobertura lateral detectada",
+        confidence: 0.62,
+        dimensionsMeters: {
+          length: 16.2,
+          width: 7.2,
+        },
+        polygon: [
+          { x: 0.5, y: 40.5 },
+          { x: 38.4, y: 40.8 },
+          { x: 38.2, y: 92.2 },
+          { x: 0.5, y: 92.8 },
+        ],
+        notes: [
+          "Area grande, mas pode pertencer a outro bloco da construcao.",
+          "Exige confirmacao comercial antes de entrar na proposta.",
+        ],
+      },
+    ],
+  });
+});
+
 app.post(
   "/api/reconstructions",
   assignReconstructionJobId,
