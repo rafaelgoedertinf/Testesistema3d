@@ -144,6 +144,8 @@ export default function App() {
   const projectIsValid = project.customerName.trim().length > 0 && project.phone.trim().length > 0;
   const totalPhotoSizeMb = photoFiles.reduce((total, file) => total + file.size, 0) / 1024 / 1024;
   const pointCloudFile = reconstructionJob?.outputFiles.find((file) => file.endsWith(".ply"));
+  const reconstructionIsRunning =
+    reconstructionJob?.status === "queued" || reconstructionJob?.status === "running";
 
   useEffect(() => {
     const validIds = new Set(gridPanelIds);
@@ -362,9 +364,13 @@ export default function App() {
             type="button"
             className="primary-action"
             onClick={handleStartReconstruction}
-            disabled={isUploadingPhotos || photoFiles.length < 10}
+            disabled={isUploadingPhotos || reconstructionIsRunning || photoFiles.length < 10}
           >
-            {isUploadingPhotos ? "Enviando fotos..." : "Gerar 3D das fotos"}
+            {isUploadingPhotos
+              ? "Enviando fotos..."
+              : reconstructionIsRunning
+                ? "Processando 3D..."
+                : "Gerar 3D das fotos"}
           </button>
           {reconstructionError && <div className="notice error">{reconstructionError}</div>}
           {reconstructionJob && (
