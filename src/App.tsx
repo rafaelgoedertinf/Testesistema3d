@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import AerialPhotoPlanner from "./AerialPhotoPlanner";
 import AutoSolarPlanner from "./AutoSolarPlanner";
 import type { RoofAnalysis } from "./AutoSolarPlanner";
 import { calculateLayout, calculateScaleFactor } from "./layoutCalculator";
@@ -330,6 +331,8 @@ export default function App() {
           <span>{enabledPanelCount} placas ativas no layout atual</span>
         </div>
       </section>
+
+      <AerialPhotoPlanner selectedPanel={selectedPanel} />
 
       {roofAnalysis?.available && (
         <AutoSolarPlanner analysis={roofAnalysis} selectedPanel={selectedPanel} />

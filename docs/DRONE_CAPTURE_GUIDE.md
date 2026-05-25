@@ -34,6 +34,29 @@ Para teste inicial:
 4. Evitar mudar muito o zoom.
 5. Evitar sombras fortes, chuva, reflexos e fotos tremidas.
 
+## Novo fluxo rapido por foto aerea
+
+Para o fluxo comercial mais rapido, capture:
+
+### Foto principal de cima
+
+- 1 a 3 fotos quase verticais, olhando de cima para baixo.
+- Use a maior resolucao disponivel no drone.
+- Enquadre a casa inteira e um pouco de margem ao redor.
+- Essa foto sera usada para selecionar a casa e posicionar as placas.
+
+### Fotos diagonais de apoio
+
+- 8 a 20 fotos diagonais/obliquas ao redor da casa.
+- Elas ajudam a entender queda do telhado, desniveis, platibandas e obstaculos.
+- Nao precisam ser usadas como base principal do layout, mas ajudam o sistema a interpretar os planos.
+
+Resumo pratico:
+
+- Para colocar placas: foto de cima e alta resolucao.
+- Para entender inclinacao/desnivel: fotos diagonais.
+- Para gerar 3D completo: conjunto maior com sobreposicao.
+
 ## O que o sistema deve avisar
 
 O app deve marcar como baixa qualidade quando:

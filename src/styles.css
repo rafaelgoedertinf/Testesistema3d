@@ -481,6 +481,104 @@ select:focus {
   margin-bottom: 24px;
 }
 
+.aerial-planner-card {
+  margin-bottom: 24px;
+}
+
+.aerial-toolbar {
+  display: grid;
+  grid-template-columns: 1fr auto auto auto;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.secondary-upload,
+.aerial-toolbar button,
+.primary-mini-action {
+  display: inline-grid;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 14px;
+  background: #eef4ef;
+  color: #173f2a;
+  font-weight: 800;
+  margin-bottom: 0;
+  padding: 11px 14px;
+}
+
+.secondary-upload input {
+  display: none;
+}
+
+.primary-mini-action {
+  background: #173f2a !important;
+  color: #fff !important;
+}
+
+.aerial-planner-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.65fr);
+  gap: 20px;
+}
+
+.aerial-stage {
+  position: relative;
+  overflow: hidden;
+  border-radius: 22px;
+  background: #102018;
+  cursor: crosshair;
+}
+
+.aerial-stage img {
+  display: block;
+  width: 100%;
+}
+
+.aerial-stage svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.house-selection-fill {
+  fill: rgba(255, 255, 255, 0.12);
+  stroke: rgba(255, 255, 255, 0.65);
+  stroke-width: 0.28;
+}
+
+.house-selection-line {
+  fill: none;
+  stroke: #ffffff;
+  stroke-dasharray: 1.2 0.8;
+  stroke-width: 0.35;
+}
+
+.selection-point {
+  fill: #ffffff;
+  stroke: #173f2a;
+  stroke-width: 0.35;
+}
+
+.aerial-instructions {
+  border-radius: 16px;
+  background: #e8f1ff;
+  color: #153e7c;
+  padding: 12px;
+}
+
+.aerial-instructions strong {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.aerial-instructions p {
+  font-size: 0.9rem;
+  line-height: 1.45;
+  margin-bottom: 0;
+}
+
 .auto-planner-layout {
   display: grid;
   grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.65fr);
@@ -639,6 +737,8 @@ select:focus {
   .hero,
   .two-columns,
   .summary-grid,
+  .aerial-toolbar,
+  .aerial-planner-layout,
   .auto-planner-layout,
   .auto-kpis,
   .viewer-controls,
