@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent } from "react";
 import CleanTechnicalModelViewer from "./CleanTechnicalModelViewer";
 import { calculateLayout } from "./layoutCalculator";
@@ -57,6 +57,8 @@ export default function AerialPhotoPlanner({ selectedPanel }: AerialPhotoPlanner
   const [newAreaLengthMeters, setNewAreaLengthMeters] = useState(8);
   const [newAreaWidthMeters, setNewAreaWidthMeters] = useState(4);
   const [renderSlopeAnalysis, setRenderSlopeAnalysis] = useState<RenderSlopeAnalysis | null>(null);
+  const [generatedModelMessage, setGeneratedModelMessage] = useState("");
+  const cleanModelRef = useRef<HTMLDivElement | null>(null);
 
   const selectedArea = roofAreas.find((area) => area.id === selectedAreaId) ?? roofAreas[0];
   const plannedAreas = useMemo(() => {
@@ -94,6 +96,14 @@ export default function AerialPhotoPlanner({ selectedPanel }: AerialPhotoPlanner
       .catch(() => setRenderSlopeAnalysis(null));
   }, []);
 
+  useEffect(() => {
+    if (!generatedModelMessage) {
+      return;
+    }
+
+    window.setTimeout(() => cleanModelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 100);
+  }, [generatedModelMessage]);
+
   function handleImageUpload(files: FileList | null) {
     const file = files?.[0];
 
@@ -112,6 +122,7 @@ export default function AerialPhotoPlanner({ selectedPanel }: AerialPhotoPlanner
     setSelectionPoints([]);
     setRoofAreas([]);
     setSelectedAreaId("");
+    setGeneratedModelMessage("");
   }
 
   function handleStageClick(event: MouseEvent<HTMLDivElement>) {
@@ -148,6 +159,7 @@ export default function AerialPhotoPlanner({ selectedPanel }: AerialPhotoPlanner
     setRoofAreas((current) => [...current, area]);
     setSelectedAreaId(area.id);
     setSelectionPoints([]);
+    setGeneratedModelMessage("");
   }
 
   function generateHouseTechnicalModel() {
@@ -199,6 +211,9 @@ export default function AerialPhotoPlanner({ selectedPanel }: AerialPhotoPlanner
     setRoofAreas(roofAreasFromHouse);
     setSelectedAreaId(roofAreasFromHouse[0].id);
     setSelectionPoints([]);
+    setGeneratedModelMessage(
+      `Modelo 3D da casa gerado com volume, paredes, cumeeira e ${roofAreasFromHouse.length} panos de telhado.`,
+    );
   }
 
   function removeSelectedArea() {
@@ -283,9 +298,16 @@ export default function AerialPhotoPlanner({ selectedPanel }: AerialPhotoPlanner
           disabled={selectionPoints.length !== 4}
           onClick={generateHouseTechnicalModel}
         >
-          Gerar modelo da casa
+          Gerar 3D da casa
         </button>
       </div>
+
+      {generatedModelMessage && (
+        <div className="model-generated-banner">
+          <strong>Modelo técnico criado</strong>
+          <span>{generatedModelMessage}</span>
+        </div>
+      )}
 
       <div className="aerial-planner-layout">
         <div className="aerial-stage" onClick={handleStageClick}>
@@ -490,12 +512,12 @@ export default function AerialPhotoPlanner({ selectedPanel }: AerialPhotoPlanner
       </div>
 
       {roofAreas.length > 0 && (
-        <div className="clean-model-section">
+        <div className="clean-model-section" ref={cleanModelRef}>
           <div>
-            <h3>Modelo tecnico 3D limpo</h3>
+            <h3>{generatedModelMessage ? "3D técnico da casa" : "Modelo tecnico 3D limpo"}</h3>
             <p className="helper">
-              Esta visualizacao redesenha os panos selecionados como superficies tecnicas limpas,
-              usando a inclinacao detectada no render. E aqui que as placas devem ficar no produto final.
+              Esta visualizacao gera uma casa simplificada com paredes, telhado inclinado e placas
+              posicionadas em geometria controlada. E aqui que o dimensionamento deve evoluir.
             </p>
           </div>
           <CleanTechnicalModelViewer

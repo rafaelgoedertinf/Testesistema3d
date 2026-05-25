@@ -487,7 +487,7 @@ select:focus {
 
 .aerial-toolbar {
   display: grid;
-  grid-template-columns: 1fr auto auto auto;
+  grid-template-columns: 1fr auto auto auto auto;
   gap: 10px;
   margin-bottom: 16px;
 }
@@ -514,6 +514,25 @@ select:focus {
 .primary-mini-action {
   background: #173f2a !important;
   color: #fff !important;
+}
+
+.model-generated-banner {
+  display: grid;
+  gap: 4px;
+  border: 1px solid #bfe3ca;
+  border-radius: 16px;
+  background: #e7f5ec;
+  color: #173f2a;
+  margin-bottom: 16px;
+  padding: 12px 14px;
+}
+
+.model-generated-banner strong {
+  font-size: 0.98rem;
+}
+
+.model-generated-banner span {
+  font-size: 0.9rem;
 }
 
 .aerial-planner-layout {

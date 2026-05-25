@@ -128,7 +128,7 @@ function buildTechnicalModel({
 }: CleanTechnicalModelViewerProps) {
   const group = new THREE.Group();
   const roofMaterial = new THREE.MeshStandardMaterial({
-    color: 0xd8ded8,
+    color: 0xbfc8bd,
     metalness: 0.05,
     roughness: 0.85,
     side: THREE.DoubleSide,
@@ -147,9 +147,10 @@ function buildTechnicalModel({
     side: THREE.DoubleSide,
   });
   const blockMaterial = new THREE.MeshStandardMaterial({
-    color: 0xf0eadf,
+    color: 0xf2eadc,
     roughness: 0.8,
   });
+  const ridgeMaterial = new THREE.LineBasicMaterial({ color: 0x8f1d1d, linewidth: 2 });
 
   let xOffset = 0;
   const houseGroups = groupHouseAreas(areas);
@@ -165,6 +166,7 @@ function buildTechnicalModel({
       panelMaterial,
       disabledPanelMaterial,
       roofMaterial,
+      ridgeMaterial,
       selectedPanel,
       setbackMeters,
       xOffset,
@@ -286,6 +288,7 @@ function renderStandaloneArea({
 type RenderHouseOptions = RenderMaterials & RenderModelOptions & {
   group: THREE.Group;
   houseAreas: RoofArea[];
+  ridgeMaterial: THREE.Material;
   xOffset: number;
 };
 
@@ -299,6 +302,7 @@ function renderHouseModel({
   panelMaterial,
   disabledPanelMaterial,
   roofMaterial,
+  ridgeMaterial,
   selectedPanel,
   setbackMeters,
   xOffset,
@@ -312,9 +316,21 @@ function renderHouseModel({
   const frontProjected = front.projectedWidthMeters;
   const backProjected = back.projectedWidthMeters;
   const depth = frontProjected + backProjected;
-  const block = new THREE.Mesh(new THREE.BoxGeometry(lengthMeters, 0.45, depth), blockMaterial);
-  block.position.set(centerX, -0.25, (backProjected - frontProjected) / 2);
+  const wallHeight = 1.15;
+  const block = new THREE.Mesh(new THREE.BoxGeometry(lengthMeters, wallHeight, depth), blockMaterial);
+  block.position.set(centerX, -wallHeight / 2, (backProjected - frontProjected) / 2);
   group.add(block);
+  group.add(new THREE.LineSegments(new THREE.EdgesGeometry(block.geometry), edgeMaterial).translateX(centerX).translateY(-wallHeight / 2).translateZ((backProjected - frontProjected) / 2));
+
+  const ridgeHeight = Math.max(
+    Math.tan(frontSlope) * frontProjected,
+    Math.tan(backSlope) * backProjected,
+  );
+  const ridge = new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(centerX - lengthMeters / 2, ridgeHeight, 0),
+    new THREE.Vector3(centerX + lengthMeters / 2, ridgeHeight, 0),
+  ]);
+  group.add(new THREE.Line(ridge, ridgeMaterial));
 
   [
     { area: front, side: "front" as const, projectedWidth: frontProjected, slopeRadians: frontSlope },
