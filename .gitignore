@@ -3,5 +3,6 @@ dist/
 release/
 data/reconstructions/*
 !data/reconstructions/.gitkeep
+odm-datasets/
 *.log
 .DS_Store

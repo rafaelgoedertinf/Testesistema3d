@@ -2,7 +2,7 @@ import cors from "cors";
 import express from "express";
 import multer from "multer";
 import { mkdir } from "node:fs/promises";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { imageSize } from "image-size";
@@ -13,6 +13,7 @@ import { runPhotogrammetry } from "./photogrammetry";
 const port = Number(process.env.API_PORT ?? 3001);
 const rootDirectory = process.cwd();
 const reconstructionRoot = path.join(rootDirectory, "data", "reconstructions");
+const odmTestRoot = path.join(rootDirectory, "odm-datasets", "solarfit-test");
 
 const app = express();
 app.use(cors());
@@ -59,6 +60,41 @@ const upload = multer({
 
 app.get("/api/health", (_request, response) => {
   response.json({ ok: true });
+});
+
+app.get("/api/odm-test/status", (_request, response) => {
+  const modelPath = path.join(odmTestRoot, "odm_texturing", "odm_textured_model_geo.obj");
+  const materialPath = path.join(odmTestRoot, "odm_texturing", "odm_textured_model_geo.mtl");
+  const texturePath = path.join(
+    odmTestRoot,
+    "odm_texturing",
+    "odm_textured_model_geo_material0000_map_Kd.png",
+  );
+  const denseStatsPath = path.join(odmTestRoot, "odm_report", "stats.json");
+  const pointCloudStatsPath = path.join(odmTestRoot, "odm_filterpoints", "point_cloud_stats.json");
+
+  if (!existsSync(modelPath) || !existsSync(materialPath) || !existsSync(texturePath)) {
+    response.json({ available: false });
+    return;
+  }
+
+  const modelText = readFileSync(modelPath, "utf8");
+  const stats = readJson(denseStatsPath);
+  const pointCloudStats = readJson(pointCloudStatsPath);
+
+  response.json({
+    available: true,
+    modelUrl: "/api/odm-test/files/odm_texturing/odm_textured_model_geo.obj",
+    materialUrl: "/api/odm-test/files/odm_texturing/odm_textured_model_geo.mtl",
+    resourcePath: "/api/odm-test/files/odm_texturing/",
+    reportUrl: "/api/odm-test/files/odm_report/report.pdf",
+    densePointCount:
+      stats?.point_cloud_statistics?.stats?.statistic?.[0]?.count ??
+      undefined,
+    pointSpacing: pointCloudStats?.spacing,
+    vertices: countOccurrences(modelText, "\nv "),
+    faces: countOccurrences(modelText, "\nf "),
+  });
 });
 
 app.post(
@@ -126,6 +162,8 @@ app.use(
     express.static(job.outputDirectory)(request, response, next);
   },
 );
+
+app.use("/api/odm-test/files", express.static(odmTestRoot));
 
 app.use(
   (
@@ -213,4 +251,16 @@ function inspectUploadedImages(files: Express.Multer.File[]): ReconstructionJob[
     quality: recommendations.length > 0 ? "low" : "unknown",
     recommendations,
   };
+}
+
+function readJson(filePath: string) {
+  try {
+    return JSON.parse(readFileSync(filePath, "utf8"));
+  } catch {
+    return undefined;
+  }
+}
+
+function countOccurrences(text: string, search: string) {
+  return text.split(search).length - 1;
 }

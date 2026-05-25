@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { calculateLayout, calculateScaleFactor } from "./layoutCalculator";
 import PointCloudViewer from "./PointCloudViewer";
+import TexturedModelViewer from "./TexturedModelViewer";
 import type { CustomerProject, RoofSettings, ScaleReference, SolarPanel } from "./types";
 
 const STORAGE_KEY = "solarfit-3d-mvp-state";
@@ -59,6 +60,18 @@ type ReconstructionJob = {
     quality: "unknown" | "low" | "medium" | "good";
     recommendations: string[];
   };
+};
+
+type OdmTestStatus = {
+  available: boolean;
+  modelUrl?: string;
+  materialUrl?: string;
+  resourcePath?: string;
+  reportUrl?: string;
+  densePointCount?: number;
+  pointSpacing?: number;
+  vertices?: number;
+  faces?: number;
 };
 
 const initialProject: CustomerProject = {
@@ -136,6 +149,7 @@ export default function App() {
   const [reconstructionJob, setReconstructionJob] = useState<ReconstructionJob | null>(null);
   const [reconstructionError, setReconstructionError] = useState("");
   const [isUploadingPhotos, setIsUploadingPhotos] = useState(false);
+  const [odmTestStatus, setOdmTestStatus] = useState<OdmTestStatus | null>(null);
   const [newPanel, setNewPanel] = useState<Omit<SolarPanel, "id">>({
     manufacturer: "",
     model: "",
@@ -195,6 +209,13 @@ export default function App() {
 
     return () => window.clearInterval(timer);
   }, [reconstructionJob]);
+
+  useEffect(() => {
+    void fetch("/api/odm-test/status")
+      .then((response) => readApiResponse<OdmTestStatus>(response))
+      .then((status) => setOdmTestStatus(status))
+      .catch(() => setOdmTestStatus(null));
+  }, []);
 
   function updateProject(field: keyof CustomerProject, value: string) {
     setProject((current) => ({ ...current, [field]: value }));
@@ -301,6 +322,53 @@ export default function App() {
           <span>{enabledPanelCount} placas ativas no layout atual</span>
         </div>
       </section>
+
+      {odmTestStatus?.available &&
+        odmTestStatus.modelUrl &&
+        odmTestStatus.materialUrl &&
+        odmTestStatus.resourcePath && (
+          <section className="card layout-card">
+            <div className="card-header">
+              <span>3D</span>
+              <h2>Teste OpenDroneMap</h2>
+            </div>
+            <div className="summary-grid">
+              <div>
+                <strong>{odmTestStatus.densePointCount?.toLocaleString("pt-BR") ?? "-"}</strong>
+                <span>pontos densos</span>
+              </div>
+              <div>
+                <strong>{odmTestStatus.vertices?.toLocaleString("pt-BR") ?? "-"}</strong>
+                <span>vertices</span>
+              </div>
+              <div>
+                <strong>{odmTestStatus.faces?.toLocaleString("pt-BR") ?? "-"}</strong>
+                <span>faces</span>
+              </div>
+              <div>
+                <strong>{odmTestStatus.pointSpacing ?? "-"}</strong>
+                <span>espacamento estimado</span>
+              </div>
+            </div>
+            <p className="helper">
+              Resultado experimental gerado com OpenDroneMap usando as mesmas 24 imagens 1280x720.
+              O modelo abaixo deve ser melhor que a nuvem esparsa do COLMAP, mas ainda depende de
+              fotos originais de maior resolucao para ficar comercial.
+            </p>
+            <TexturedModelViewer
+              materialUrl={odmTestStatus.materialUrl}
+              modelUrl={odmTestStatus.modelUrl}
+              resourcePath={odmTestStatus.resourcePath}
+            />
+            {odmTestStatus.reportUrl && (
+              <p className="helper">
+                <a href={odmTestStatus.reportUrl} target="_blank" rel="noreferrer">
+                  Abrir relatorio gerado pelo OpenDroneMap
+                </a>
+              </p>
+            )}
+          </section>
+        )}
 
       <section className="grid two-columns">
         <div className="card">

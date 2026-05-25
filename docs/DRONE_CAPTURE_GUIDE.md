@@ -52,3 +52,12 @@ Para apresentacao ao cliente, precisamos sair de nuvem esparsa e chegar em:
 - textura;
 - escala calibrada;
 - plano do telhado selecionavel.
+
+## Resultado do teste com as imagens atuais
+
+As 24 imagens 1280x720 foram processadas em dois caminhos:
+
+- COLMAP esparso: aproximadamente 6 mil pontos.
+- OpenDroneMap: aproximadamente 222 mil pontos densos e modelo OBJ texturizado.
+
+O OpenDroneMap melhorou bastante a reconstrucao, mas as imagens continuam limitadas por serem 1280x720. Para homologar qualidade comercial, o proximo teste deve usar fotos originais do drone em alta resolucao.

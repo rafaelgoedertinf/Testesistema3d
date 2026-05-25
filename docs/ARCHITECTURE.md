@@ -72,13 +72,16 @@ Validacao inicial:
 - conjunto com 24 fotos e aproximadamente 41 MB processou com sucesso;
 - resultado gerado: `sparse-point-cloud.ply`;
 - a etapa densa do COLMAP neste ambiente Linux falhou porque o pacote disponivel exige CUDA para stereo denso.
+- teste com OpenDroneMap via Docker processou as mesmas 24 imagens 1280x720;
+- ODM gerou nuvem densa com 222.587 pontos, malha texturizada OBJ com 96.701 vertices e 160.445 faces, alem de relatorio PDF;
+- mesmo com melhora grande sobre o COLMAP esparso, a qualidade visual ainda depende de fotos originais de maior resolucao.
 
 Proxima etapa tecnica:
 
-1. testar a nuvem de pontos no visualizador 3D com fotos reais de drone;
-2. estudar OpenDroneMap/OpenMVS para malha densa sem depender de CUDA;
-3. calibrar escala e medidas sobre o resultado 3D;
-4. evoluir de nuvem de pontos para malha/textura quando a base estiver validada.
+1. integrar OpenDroneMap como pipeline principal de reconstrucao densa;
+2. testar com fotos originais do drone, idealmente 12 MP ou mais;
+3. calibrar escala e medidas sobre o modelo texturizado;
+4. selecionar planos de telhado sobre a malha para posicionar placas.
 
 ### Instalador macOS
 
