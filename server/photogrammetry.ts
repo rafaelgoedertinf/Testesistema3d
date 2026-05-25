@@ -123,7 +123,7 @@ export async function runPhotogrammetry(job: ReconstructionJob) {
       status: "completed",
       currentStep: "Reconstrucao concluida",
       message:
-        "Nuvem de pontos 3D inicial gerada com sucesso. Esta versao esparsa valida a reconstrucao; a malha densa sera a proxima evolucao.",
+        "Nuvem de pontos colorida gerada com sucesso. Esta e uma previa tecnica esparsa; ainda falta gerar superficie densa e textura para apresentacao ao cliente.",
       outputFiles: ["sparse-point-cloud.ply"],
     });
   } catch (error) {

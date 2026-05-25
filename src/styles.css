@@ -316,7 +316,7 @@ select:focus {
   overflow: hidden;
   border: 1px solid rgba(23, 63, 42, 0.18);
   border-radius: 16px;
-  background: #f4faf6;
+  background: #111827;
 }
 
 .point-cloud-viewer canvas {

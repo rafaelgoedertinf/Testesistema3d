@@ -399,7 +399,11 @@ export default function App() {
               )}
               {reconstructionJob.status === "completed" && pointCloudFile && (
                 <div className="viewer-block">
-                  <strong>Previa 3D da nuvem de pontos</strong>
+                  <strong>Previa tecnica da nuvem de pontos</strong>
+                  <p>
+                    Esta visualizacao ainda nao e a versao final para cliente: faltam superficie
+                    densa e textura. Ela serve para validar se as fotos foram reconstruidas.
+                  </p>
                   <PointCloudViewer
                     url={`/api/reconstructions/${reconstructionJob.id}/files/${pointCloudFile}`}
                   />

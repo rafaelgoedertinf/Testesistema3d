@@ -20,7 +20,7 @@ export default function PointCloudViewer({ url }: PointCloudViewerProps) {
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(window.devicePixelRatio);
     renderer.setSize(container.clientWidth, container.clientHeight);
-    renderer.setClearColor(0xf4faf6);
+    renderer.setClearColor(0x111827);
     container.appendChild(renderer.domElement);
 
     const scene = new THREE.Scene();
@@ -61,17 +61,18 @@ export default function PointCloudViewer({ url }: PointCloudViewerProps) {
           geometry.translate(-center.x, -center.y, -center.z);
         }
 
+        const maxAxis = Math.max(size.x, size.y, size.z, 1);
         const material = new THREE.PointsMaterial({
-          color: 0x174f35,
-          size: 0.025,
+          color: geometry.getAttribute("color") ? 0xffffff : 0x56d190,
+          size: Math.max(maxAxis / 260, 0.01),
           sizeAttenuation: true,
+          vertexColors: Boolean(geometry.getAttribute("color")),
         });
 
         pointCloud = new THREE.Points(geometry, material);
         pointCloud.rotation.x = -Math.PI / 2;
         scene.add(pointCloud);
 
-        const maxAxis = Math.max(size.x, size.y, size.z, 1);
         camera.position.set(0, -maxAxis * 1.6, maxAxis * 0.9);
         camera.near = maxAxis / 1000;
         camera.far = maxAxis * 100;
