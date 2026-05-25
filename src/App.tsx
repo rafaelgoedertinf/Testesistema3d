@@ -40,6 +40,16 @@ type SavedState = {
   disabledPanelIds: string[];
 };
 
+type ReconstructionJob = {
+  id: string;
+  status: "queued" | "running" | "completed" | "failed";
+  photoCount: number;
+  message: string;
+  currentStep?: string;
+  errorCode?: "ENGINE_MISSING" | "PROCESS_FAILED";
+  outputFiles: string[];
+};
+
 const initialProject: CustomerProject = {
   customerName: "",
   phone: "",
@@ -96,6 +106,9 @@ export default function App() {
     savedState?.disabledPanelIds ?? [],
   );
   const [photoFiles, setPhotoFiles] = useState<File[]>([]);
+  const [reconstructionJob, setReconstructionJob] = useState<ReconstructionJob | null>(null);
+  const [reconstructionError, setReconstructionError] = useState("");
+  const [isUploadingPhotos, setIsUploadingPhotos] = useState(false);
   const [newPanel, setNewPanel] = useState<Omit<SolarPanel, "id">>({
     manufacturer: "",
     model: "",
@@ -131,6 +144,28 @@ export default function App() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   }, [disabledPanelIds, panels, project, roof, scale, selectedPanelId]);
 
+  useEffect(() => {
+    if (!reconstructionJob || !["queued", "running"].includes(reconstructionJob.status)) {
+      return undefined;
+    }
+
+    const timer = window.setInterval(async () => {
+      try {
+        const response = await fetch(`/api/reconstructions/${reconstructionJob.id}`);
+        if (!response.ok) {
+          return;
+        }
+
+        const job = (await response.json()) as ReconstructionJob;
+        setReconstructionJob(job);
+      } catch {
+        // The UI keeps the last known status if polling temporarily fails.
+      }
+    }, 2000);
+
+    return () => window.clearInterval(timer);
+  }, [reconstructionJob]);
+
   function updateProject(field: keyof CustomerProject, value: string) {
     setProject((current) => ({ ...current, [field]: value }));
   }
@@ -145,6 +180,43 @@ export default function App() {
 
   function handlePhotoSelection(files: FileList | null) {
     setPhotoFiles(files ? Array.from(files) : []);
+    setReconstructionJob(null);
+    setReconstructionError("");
+  }
+
+  async function handleStartReconstruction() {
+    if (photoFiles.length < 10) {
+      setReconstructionError("Selecione pelo menos 10 fotos antes de gerar o 3D.");
+      return;
+    }
+
+    setIsUploadingPhotos(true);
+    setReconstructionError("");
+    setReconstructionJob(null);
+
+    try {
+      const formData = new FormData();
+      photoFiles.forEach((file) => formData.append("photos", file));
+
+      const response = await fetch("/api/reconstructions", {
+        method: "POST",
+        body: formData,
+      });
+
+      const payload = await response.json();
+
+      if (!response.ok) {
+        throw new Error(payload.message ?? "Nao foi possivel iniciar a geracao 3D.");
+      }
+
+      setReconstructionJob(payload as ReconstructionJob);
+    } catch (error) {
+      setReconstructionError(
+        error instanceof Error ? error.message : "Nao foi possivel iniciar a geracao 3D.",
+      );
+    } finally {
+      setIsUploadingPhotos(false);
+    }
   }
 
   function handleAddPanel() {
@@ -183,8 +255,8 @@ export default function App() {
           <span className="eyebrow">MVP local para MacBook</span>
           <h1>SolarFit 3D</h1>
           <p>
-            Base inicial para validar se placas solares cabem no telhado do cliente. A geracao 3D
-            entra na proxima etapa; este prototipo ja testa projeto, fotos, escala, placas e layout.
+            Base inicial para validar se placas solares cabem no telhado do cliente. O upload real
+            de fotos agora cria uma tarefa de reconstrucao 3D para integrar com o motor COLMAP.
           </p>
         </div>
         <div className="status-card">
@@ -261,6 +333,47 @@ export default function App() {
             ))}
             {photoFiles.length > 6 && <li>+ {photoFiles.length - 6} arquivos</li>}
           </ul>
+          <button
+            type="button"
+            className="primary-action"
+            onClick={handleStartReconstruction}
+            disabled={isUploadingPhotos || photoFiles.length < 10}
+          >
+            {isUploadingPhotos ? "Enviando fotos..." : "Gerar 3D das fotos"}
+          </button>
+          {reconstructionError && <div className="notice error">{reconstructionError}</div>}
+          {reconstructionJob && (
+            <div className={`reconstruction-status ${reconstructionJob.status}`}>
+              <div>
+                <strong>
+                  {reconstructionJob.status === "completed"
+                    ? "3D gerado"
+                    : reconstructionJob.status === "failed"
+                      ? "Geracao 3D interrompida"
+                      : "Gerando 3D"}
+                </strong>
+                <span>{reconstructionJob.currentStep}</span>
+              </div>
+              <p>{reconstructionJob.message}</p>
+              {reconstructionJob.errorCode === "ENGINE_MISSING" && (
+                <p>
+                  Este ambiente de teste ainda nao tem o motor 3D instalado. No Mac, a proxima
+                  etapa sera empacotar COLMAP/OpenDroneMap junto ao instalador.
+                </p>
+              )}
+              {reconstructionJob.outputFiles.length > 0 && (
+                <ul>
+                  {reconstructionJob.outputFiles.map((file) => (
+                    <li key={file}>
+                      <a href={`/api/reconstructions/${reconstructionJob.id}/files/${file}`}>
+                        Baixar {file}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
         </div>
       </section>
 

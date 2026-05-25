@@ -27,6 +27,9 @@ Funcionalidades iniciais:
 - nome e telefone obrigatorios;
 - email e endereco opcionais;
 - importacao de fotos de drone;
+- envio real das fotos para uma API local;
+- criacao de tarefa de reconstrucao 3D;
+- status claro do processamento;
 - aviso quando houver menos de 10 fotos;
 - cadastro de placas solares;
 - escolha de uma placa cadastrada;
@@ -40,7 +43,7 @@ Funcionalidades iniciais:
 
 Ainda nao entram no primeiro MVP:
 
-- processamento 3D completo a partir de fotos;
+- processamento 3D completo com malha texturizada;
 - deteccao automatica de planos de telhado;
 - analise automatica de sombra;
 - CRM web;

@@ -52,10 +52,25 @@ Ferramentas candidatas:
 Fluxo planejado:
 
 1. usuario importa fotos de drone;
-2. sistema cria uma tarefa de processamento;
-3. motor 3D gera ortofoto, nuvem de pontos e/ou malha 3D;
-4. usuario calibra uma medida real;
-5. app usa a escala para medir e posicionar placas.
+2. frontend envia as fotos para a API local;
+3. sistema cria uma tarefa de processamento;
+4. motor 3D gera ortofoto, nuvem de pontos e/ou malha 3D;
+5. usuario acompanha o status do processamento;
+6. resultado fica disponivel para medicao e posicionamento de placas.
+
+Estado atual:
+
+- upload real de fotos implementado;
+- API local cria tarefas de reconstrucao;
+- pipeline preparado para executar COLMAP quando ele estiver instalado;
+- se COLMAP nao existir no ambiente, a tarefa informa erro tecnico claro `ENGINE_MISSING`.
+
+Proxima etapa tecnica:
+
+1. instalar/testar COLMAP no Mac;
+2. validar geracao de nuvem de pontos `.ply` com fotos reais de drone;
+3. exibir o arquivo `.ply` no visualizador 3D;
+4. evoluir de nuvem de pontos para malha/textura quando a base estiver validada.
 
 ### Instalador macOS
 

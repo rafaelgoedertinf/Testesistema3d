@@ -27,6 +27,11 @@ button {
   cursor: pointer;
 }
 
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .app-shell {
   max-width: 1180px;
   margin: 0 auto;
@@ -226,6 +231,11 @@ select:focus {
   color: #16633a;
 }
 
+.notice.error {
+  background: #ffe5e5;
+  color: #8f1d1d;
+}
+
 .file-list {
   margin: 0;
   padding-left: 18px;
@@ -233,6 +243,66 @@ select:focus {
 
 .file-list li {
   margin-bottom: 5px;
+}
+
+.primary-action {
+  width: 100%;
+  border: 0;
+  border-radius: 16px;
+  background: #173f2a;
+  color: #fff;
+  font-weight: 800;
+  margin: 18px 0 12px;
+  padding: 13px 16px;
+}
+
+.reconstruction-status {
+  border-radius: 18px;
+  margin-top: 12px;
+  padding: 16px;
+}
+
+.reconstruction-status div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.reconstruction-status strong {
+  display: block;
+}
+
+.reconstruction-status span,
+.reconstruction-status p {
+  color: inherit;
+  font-size: 0.92rem;
+}
+
+.reconstruction-status p {
+  line-height: 1.5;
+  margin-bottom: 8px;
+}
+
+.reconstruction-status.queued,
+.reconstruction-status.running {
+  background: #e8f1ff;
+  color: #153e7c;
+}
+
+.reconstruction-status.completed {
+  background: #dff4e6;
+  color: #16633a;
+}
+
+.reconstruction-status.failed {
+  background: #fff0d9;
+  color: #76500e;
+}
+
+.reconstruction-status a {
+  color: inherit;
+  font-weight: 800;
 }
 
 .helper {

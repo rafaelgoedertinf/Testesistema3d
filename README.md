@@ -38,6 +38,8 @@ Rodar no navegador:
 npm run dev
 ```
 
+Esse comando inicia o frontend e a API local para upload/processamento.
+
 Rodar como app desktop em modo desenvolvimento:
 
 ```bash

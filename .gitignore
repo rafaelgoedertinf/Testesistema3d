@@ -1,5 +1,7 @@
 node_modules/
 dist/
 release/
+data/reconstructions/*
+!data/reconstructions/.gitkeep
 *.log
 .DS_Store
