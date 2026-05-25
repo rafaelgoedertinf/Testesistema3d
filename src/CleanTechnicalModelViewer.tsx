@@ -152,61 +152,195 @@ function buildTechnicalModel({
   });
 
   let xOffset = 0;
+  const houseGroups = groupHouseAreas(areas);
 
-  areas.forEach((area) => {
-    const correctedWidthMeters = correctWidthForSlope(area.projectedWidthMeters, area.slopeDegrees);
-    const projectedWidthMeters = area.projectedWidthMeters;
-    const slopeRadians = (area.slopeDegrees * Math.PI) / 180;
-    const layout = calculateLayout(selectedPanel, {
-      lengthMeters: area.lengthMeters,
-      widthMeters: correctedWidthMeters,
-      setbackMeters,
-      gapMeters,
-      orientation,
-    });
-    const centerX = xOffset + area.lengthMeters / 2;
-
-    const block = new THREE.Mesh(
-      new THREE.BoxGeometry(area.lengthMeters, 0.45, projectedWidthMeters),
+  houseGroups.forEach((houseAreas) => {
+    const consumedWidth = renderHouseModel({
       blockMaterial,
-    );
-    block.position.set(centerX, -0.25, 0);
-    group.add(block);
-
-    const roof = new THREE.Mesh(
-      createSlopedQuadGeometry(area.lengthMeters, correctedWidthMeters, slopeRadians, 0),
+      edgeMaterial,
+      gapMeters,
+      group,
+      houseAreas,
+      orientation,
+      panelMaterial,
+      disabledPanelMaterial,
       roofMaterial,
-    );
-    roof.position.x = centerX;
-    group.add(roof);
-
-    const edges = new THREE.LineSegments(new THREE.EdgesGeometry(roof.geometry), edgeMaterial);
-    edges.position.copy(roof.position);
-    group.add(edges);
-
-    for (let row = 0; row < layout.rows; row += 1) {
-      for (let column = 0; column < layout.columns; column += 1) {
-        const panelId = `${area.id}-${row}-${column}`;
-        const disabled = area.disabledPanelIds.includes(panelId);
-        const moduleLength = layout.moduleLength;
-        const moduleWidth = layout.moduleWidth;
-        const startX = -area.lengthMeters / 2 + setbackMeters + moduleLength / 2;
-        const startSurface = -correctedWidthMeters / 2 + setbackMeters + moduleWidth / 2;
-        const localX = startX + column * (moduleLength + gapMeters);
-        const surfaceY = startSurface + row * (moduleWidth + gapMeters);
-        const panel = new THREE.Mesh(
-          createSlopedQuadGeometry(moduleLength, moduleWidth, slopeRadians, 0.035),
-          disabled ? disabledPanelMaterial : panelMaterial,
-        );
-        panel.position.set(centerX + localX, surfaceY * Math.sin(slopeRadians), surfaceY * Math.cos(slopeRadians));
-        group.add(panel);
-      }
-    }
-
-    xOffset += area.lengthMeters + 1.2;
+      selectedPanel,
+      setbackMeters,
+      xOffset,
+    });
+    xOffset += consumedWidth + 1.2;
   });
 
+  areas
+    .filter((area) => !area.houseModelId)
+    .forEach((area) => {
+      renderStandaloneArea({
+        area,
+        blockMaterial,
+        edgeMaterial,
+        gapMeters,
+        group,
+        orientation,
+        panelMaterial,
+        disabledPanelMaterial,
+        roofMaterial,
+        selectedPanel,
+        setbackMeters,
+        xOffset,
+      });
+      xOffset += area.lengthMeters + 1.2;
+    });
+
   return group;
+}
+
+function groupHouseAreas(areas: RoofArea[]) {
+  const groups = new Map<string, RoofArea[]>();
+  areas.forEach((area) => {
+    if (!area.houseModelId) {
+      return;
+    }
+
+    groups.set(area.houseModelId, [...(groups.get(area.houseModelId) ?? []), area]);
+  });
+  return [...groups.values()];
+}
+
+type RenderMaterials = {
+  blockMaterial: THREE.Material;
+  edgeMaterial: THREE.Material;
+  panelMaterial: THREE.Material;
+  disabledPanelMaterial: THREE.Material;
+  roofMaterial: THREE.Material;
+};
+
+type RenderModelOptions = Pick<
+  CleanTechnicalModelViewerProps,
+  "gapMeters" | "orientation" | "selectedPanel" | "setbackMeters"
+>;
+
+type RenderAreaOptions = RenderMaterials & RenderModelOptions & {
+  area: RoofArea;
+  group: THREE.Group;
+  xOffset: number;
+};
+
+function renderStandaloneArea({
+  area,
+  blockMaterial,
+  edgeMaterial,
+  gapMeters,
+  group,
+  orientation,
+  panelMaterial,
+  disabledPanelMaterial,
+  roofMaterial,
+  selectedPanel,
+  setbackMeters,
+  xOffset,
+}: RenderAreaOptions) {
+  const correctedWidthMeters = correctWidthForSlope(area.projectedWidthMeters, area.slopeDegrees);
+  const slopeRadians = (area.slopeDegrees * Math.PI) / 180;
+  const layout = calculateLayout(selectedPanel, {
+    lengthMeters: area.lengthMeters,
+    widthMeters: correctedWidthMeters,
+    setbackMeters,
+    gapMeters,
+    orientation,
+  });
+  const centerX = xOffset + area.lengthMeters / 2;
+
+  const block = new THREE.Mesh(new THREE.BoxGeometry(area.lengthMeters, 0.45, area.projectedWidthMeters), blockMaterial);
+  block.position.set(centerX, -0.25, 0);
+  group.add(block);
+
+  const roof = new THREE.Mesh(createSlopedQuadGeometry(area.lengthMeters, correctedWidthMeters, slopeRadians, 0), roofMaterial);
+  roof.position.x = centerX;
+  group.add(roof);
+
+  const edges = new THREE.LineSegments(new THREE.EdgesGeometry(roof.geometry), edgeMaterial);
+  edges.position.copy(roof.position);
+  group.add(edges);
+
+  for (let row = 0; row < layout.rows; row += 1) {
+    for (let column = 0; column < layout.columns; column += 1) {
+      const panelId = `${area.id}-${row}-${column}`;
+      const disabled = area.disabledPanelIds.includes(panelId);
+      const moduleLength = layout.moduleLength;
+      const moduleWidth = layout.moduleWidth;
+      const startX = -area.lengthMeters / 2 + setbackMeters + moduleLength / 2;
+      const startSurface = -correctedWidthMeters / 2 + setbackMeters + moduleWidth / 2;
+      const localX = startX + column * (moduleLength + gapMeters);
+      const surfaceY = startSurface + row * (moduleWidth + gapMeters);
+      const panel = new THREE.Mesh(
+        createSlopedQuadGeometry(moduleLength, moduleWidth, slopeRadians, 0.035),
+        disabled ? disabledPanelMaterial : panelMaterial,
+      );
+      panel.position.set(centerX + localX, surfaceY * Math.sin(slopeRadians), surfaceY * Math.cos(slopeRadians));
+      group.add(panel);
+    }
+  }
+}
+
+type RenderHouseOptions = RenderMaterials & RenderModelOptions & {
+  group: THREE.Group;
+  houseAreas: RoofArea[];
+  xOffset: number;
+};
+
+function renderHouseModel({
+  blockMaterial,
+  edgeMaterial,
+  gapMeters,
+  group,
+  houseAreas,
+  orientation,
+  panelMaterial,
+  disabledPanelMaterial,
+  roofMaterial,
+  selectedPanel,
+  setbackMeters,
+  xOffset,
+}: RenderHouseOptions) {
+  const front = houseAreas.find((area) => area.roofSide === "front") ?? houseAreas[0];
+  const back = houseAreas.find((area) => area.roofSide === "back") ?? houseAreas[1] ?? houseAreas[0];
+  const lengthMeters = Math.max(front.lengthMeters, back.lengthMeters);
+  const centerX = xOffset + lengthMeters / 2;
+  const frontSlope = (front.slopeDegrees * Math.PI) / 180;
+  const backSlope = (back.slopeDegrees * Math.PI) / 180;
+  const frontProjected = front.projectedWidthMeters;
+  const backProjected = back.projectedWidthMeters;
+  const depth = frontProjected + backProjected;
+  const block = new THREE.Mesh(new THREE.BoxGeometry(lengthMeters, 0.45, depth), blockMaterial);
+  block.position.set(centerX, -0.25, (backProjected - frontProjected) / 2);
+  group.add(block);
+
+  [
+    { area: front, side: "front" as const, projectedWidth: frontProjected, slopeRadians: frontSlope },
+    { area: back, side: "back" as const, projectedWidth: backProjected, slopeRadians: backSlope },
+  ].forEach(({ area, projectedWidth, side, slopeRadians }) => {
+    const roof = new THREE.Mesh(createHalfRoofGeometry(lengthMeters, projectedWidth, slopeRadians, side, centerX), roofMaterial);
+    group.add(roof);
+    group.add(new THREE.LineSegments(new THREE.EdgesGeometry(roof.geometry), edgeMaterial));
+    renderPanelsOnHalfRoof({
+      area,
+      gapMeters,
+      group,
+      lengthMeters,
+      orientation,
+      panelMaterial,
+      disabledPanelMaterial,
+      projectedWidth,
+      selectedPanel,
+      setbackMeters,
+      side,
+      slopeRadians,
+      centerX,
+    });
+  });
+
+  return lengthMeters;
 }
 
 function createSlopedQuadGeometry(lengthMeters: number, surfaceWidthMeters: number, slopeRadians: number, lift: number) {
@@ -223,6 +357,132 @@ function createSlopedQuadGeometry(lengthMeters: number, surfaceWidthMeters: numb
   geometry.setIndex([0, 1, 2, 0, 2, 3]);
   geometry.computeVertexNormals();
   return geometry;
+}
+
+function createHalfRoofGeometry(
+  lengthMeters: number,
+  projectedWidthMeters: number,
+  slopeRadians: number,
+  side: "front" | "back",
+  centerX: number,
+) {
+  const halfLength = lengthMeters / 2;
+  const ridgeHeight = Math.tan(slopeRadians) * projectedWidthMeters;
+  const zEave = side === "front" ? -projectedWidthMeters : projectedWidthMeters;
+  const points =
+    side === "front"
+      ? [
+          new THREE.Vector3(centerX - halfLength, 0, zEave),
+          new THREE.Vector3(centerX + halfLength, 0, zEave),
+          new THREE.Vector3(centerX + halfLength, ridgeHeight, 0),
+          new THREE.Vector3(centerX - halfLength, ridgeHeight, 0),
+        ]
+      : [
+          new THREE.Vector3(centerX - halfLength, ridgeHeight, 0),
+          new THREE.Vector3(centerX + halfLength, ridgeHeight, 0),
+          new THREE.Vector3(centerX + halfLength, 0, zEave),
+          new THREE.Vector3(centerX - halfLength, 0, zEave),
+        ];
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(points.flatMap((point) => [point.x, point.y, point.z]), 3));
+  geometry.setIndex([0, 1, 2, 0, 2, 3]);
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
+type RenderPanelsOnHalfRoofOptions = {
+  area: RoofArea;
+  centerX: number;
+  disabledPanelMaterial: THREE.Material;
+  gapMeters: number;
+  group: THREE.Group;
+  lengthMeters: number;
+  orientation: OrientationMode;
+  panelMaterial: THREE.Material;
+  projectedWidth: number;
+  selectedPanel: SolarPanel;
+  setbackMeters: number;
+  side: "front" | "back";
+  slopeRadians: number;
+};
+
+function renderPanelsOnHalfRoof({
+  area,
+  centerX,
+  disabledPanelMaterial,
+  gapMeters,
+  group,
+  lengthMeters,
+  orientation,
+  panelMaterial,
+  projectedWidth,
+  selectedPanel,
+  setbackMeters,
+  side,
+  slopeRadians,
+}: RenderPanelsOnHalfRoofOptions) {
+  const surfaceWidth = correctWidthForSlope(projectedWidth, area.slopeDegrees);
+  const layout = calculateLayout(selectedPanel, {
+    lengthMeters,
+    widthMeters: surfaceWidth,
+    setbackMeters,
+    gapMeters,
+    orientation,
+  });
+
+  for (let row = 0; row < layout.rows; row += 1) {
+    for (let column = 0; column < layout.columns; column += 1) {
+      const panelId = `${area.id}-${row}-${column}`;
+      const disabled = area.disabledPanelIds.includes(panelId);
+      const moduleLength = layout.moduleLength;
+      const moduleWidth = layout.moduleWidth;
+      const xCenter = centerX - lengthMeters / 2 + setbackMeters + moduleLength / 2 + column * (moduleLength + gapMeters);
+      const surfaceCenter = setbackMeters + moduleWidth / 2 + row * (moduleWidth + gapMeters);
+      const panel = new THREE.Mesh(
+        createHalfRoofPanelGeometry(moduleLength, moduleWidth, projectedWidth, slopeRadians, side, xCenter, surfaceCenter),
+        disabled ? disabledPanelMaterial : panelMaterial,
+      );
+      group.add(panel);
+    }
+  }
+}
+
+function createHalfRoofPanelGeometry(
+  lengthMeters: number,
+  surfaceWidthMeters: number,
+  projectedWidthMeters: number,
+  slopeRadians: number,
+  side: "front" | "back",
+  xCenter: number,
+  surfaceCenter: number,
+) {
+  const halfLength = lengthMeters / 2;
+  const halfWidth = surfaceWidthMeters / 2;
+  const points = [
+    halfRoofSurfacePoint(xCenter - halfLength, surfaceCenter - halfWidth, projectedWidthMeters, slopeRadians, side, 0.04),
+    halfRoofSurfacePoint(xCenter + halfLength, surfaceCenter - halfWidth, projectedWidthMeters, slopeRadians, side, 0.04),
+    halfRoofSurfacePoint(xCenter + halfLength, surfaceCenter + halfWidth, projectedWidthMeters, slopeRadians, side, 0.04),
+    halfRoofSurfacePoint(xCenter - halfLength, surfaceCenter + halfWidth, projectedWidthMeters, slopeRadians, side, 0.04),
+  ];
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(points.flatMap((point) => [point.x, point.y, point.z]), 3));
+  geometry.setIndex([0, 1, 2, 0, 2, 3]);
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
+function halfRoofSurfacePoint(
+  x: number,
+  surfaceDistance: number,
+  projectedWidthMeters: number,
+  slopeRadians: number,
+  side: "front" | "back",
+  lift: number,
+) {
+  const projectedDistance = surfaceDistance * Math.cos(slopeRadians);
+  const height = surfaceDistance * Math.sin(slopeRadians) + lift;
+  const z = side === "front" ? -projectedWidthMeters + projectedDistance : projectedWidthMeters - projectedDistance;
+  return new THREE.Vector3(x, height, z);
 }
 
 function surfacePoint(x: number, surfaceY: number, slopeRadians: number, lift: number) {

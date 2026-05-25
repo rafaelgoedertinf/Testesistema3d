@@ -20,6 +20,8 @@ export type RoofArea = {
   slopeDegrees: number;
   confidence: number;
   disabledPanelIds: string[];
+  houseModelId?: string;
+  roofSide?: "front" | "back";
 };
 
 type AerialPhotoPlannerProps = {
@@ -148,6 +150,57 @@ export default function AerialPhotoPlanner({ selectedPanel }: AerialPhotoPlanner
     setSelectionPoints([]);
   }
 
+  function generateHouseTechnicalModel() {
+    if (selectionPoints.length !== 4) {
+      return;
+    }
+
+    const housePolygon = normalizeRoofQuad(selectionPoints as [Point, Point, Point, Point]);
+    const houseModelId = `house-model-${Date.now()}`;
+    const slopeA = renderSlopePlanes[0]?.slopeDegrees ?? 25;
+    const slopeB = renderSlopePlanes[1]?.slopeDegrees ?? slopeA;
+    const roofAreasFromHouse: RoofArea[] = [
+      {
+        id: `${houseModelId}-front`,
+        name: "Agua 1",
+        polygon: [
+          interpolateQuad(housePolygon, 0, 0),
+          interpolateQuad(housePolygon, 1, 0),
+          interpolateQuad(housePolygon, 1, 0.5),
+          interpolateQuad(housePolygon, 0, 0.5),
+        ],
+        lengthMeters: newAreaLengthMeters,
+        projectedWidthMeters: newAreaWidthMeters / 2,
+        slopeDegrees: slopeA,
+        confidence: 0.72,
+        disabledPanelIds: [],
+        houseModelId,
+        roofSide: "front",
+      },
+      {
+        id: `${houseModelId}-back`,
+        name: "Agua 2",
+        polygon: [
+          interpolateQuad(housePolygon, 0, 0.5),
+          interpolateQuad(housePolygon, 1, 0.5),
+          interpolateQuad(housePolygon, 1, 1),
+          interpolateQuad(housePolygon, 0, 1),
+        ],
+        lengthMeters: newAreaLengthMeters,
+        projectedWidthMeters: newAreaWidthMeters / 2,
+        slopeDegrees: slopeB,
+        confidence: 0.7,
+        disabledPanelIds: [],
+        houseModelId,
+        roofSide: "back",
+      },
+    ];
+
+    setRoofAreas(roofAreasFromHouse);
+    setSelectedAreaId(roofAreasFromHouse[0].id);
+    setSelectionPoints([]);
+  }
+
   function removeSelectedArea() {
     if (!selectedArea) {
       return;
@@ -224,6 +277,14 @@ export default function AerialPhotoPlanner({ selectedPanel }: AerialPhotoPlanner
         >
           Adicionar area
         </button>
+        <button
+          type="button"
+          className="primary-mini-action"
+          disabled={selectionPoints.length !== 4}
+          onClick={generateHouseTechnicalModel}
+        >
+          Gerar modelo da casa
+        </button>
       </div>
 
       <div className="aerial-planner-layout">
@@ -264,8 +325,8 @@ export default function AerialPhotoPlanner({ selectedPanel }: AerialPhotoPlanner
           <div className="aerial-instructions">
             <strong>{imageName}</strong>
             <p>
-              Clique em 4 cantos de um pano do telhado e depois em Adicionar area. Repita para todos
-              os panos onde placas podem ser instaladas.
+              Para automatizar, clique nos 4 cantos da casa inteira e use Gerar modelo da casa. Se
+              preferir controle fino, marque um pano por vez e use Adicionar area.
             </p>
           </div>
 
@@ -298,7 +359,7 @@ export default function AerialPhotoPlanner({ selectedPanel }: AerialPhotoPlanner
 
           <div className="inline-fields">
             <label>
-              Comprimento da nova area (m)
+              Comprimento base/casa (m)
               <input
                 type="number"
                 min="1"
@@ -308,7 +369,7 @@ export default function AerialPhotoPlanner({ selectedPanel }: AerialPhotoPlanner
               />
             </label>
             <label>
-              Largura projetada nova (m)
+              Largura projetada base/casa (m)
               <input
                 type="number"
                 min="1"
