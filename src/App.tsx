@@ -93,6 +93,22 @@ function loadState(): SavedState | null {
   }
 }
 
+async function readApiResponse<T>(response: Response): Promise<T> {
+  const contentType = response.headers.get("content-type") ?? "";
+
+  if (contentType.includes("application/json")) {
+    return (await response.json()) as T;
+  }
+
+  const text = await response.text();
+  const preview = text.replace(/\s+/g, " ").trim().slice(0, 180);
+  throw new Error(
+    preview.startsWith("<!DOCTYPE") || preview.startsWith("<html")
+      ? "O servidor respondeu uma pagina HTML em vez de JSON. Se voce enviou fotos grandes, provavelmente o limite do link temporario de teste foi atingido. Tente enviar 10 fotos menores para validar o fluxo."
+      : preview || "Resposta inesperada do servidor.",
+  );
+}
+
 export default function App() {
   const savedState = useMemo(loadState, []);
   const [project, setProject] = useState<CustomerProject>(savedState?.project ?? initialProject);
@@ -156,7 +172,7 @@ export default function App() {
           return;
         }
 
-        const job = (await response.json()) as ReconstructionJob;
+        const job = await readApiResponse<ReconstructionJob>(response);
         setReconstructionJob(job);
       } catch {
         // The UI keeps the last known status if polling temporarily fails.
@@ -190,6 +206,13 @@ export default function App() {
       return;
     }
 
+    if (totalPhotoSizeMb > 80 && window.location.hostname.endsWith("trycloudflare.com")) {
+      setReconstructionError(
+        "Para este link temporario de teste, envie ate aproximadamente 80 MB de fotos. Depois, no app instalado, esse limite sera diferente.",
+      );
+      return;
+    }
+
     setIsUploadingPhotos(true);
     setReconstructionError("");
     setReconstructionJob(null);
@@ -203,7 +226,7 @@ export default function App() {
         body: formData,
       });
 
-      const payload = await response.json();
+      const payload = await readApiResponse<{ message?: string } | ReconstructionJob>(response);
 
       if (!response.ok) {
         throw new Error(payload.message ?? "Nao foi possivel iniciar a geracao 3D.");

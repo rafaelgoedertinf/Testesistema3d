@@ -122,6 +122,35 @@ app.use(
   },
 );
 
+app.use(
+  (
+    error: unknown,
+    _request: express.Request,
+    response: express.Response,
+    _next: express.NextFunction,
+  ) => {
+    if (response.headersSent) {
+      return;
+    }
+
+    if (error instanceof multer.MulterError) {
+      const message =
+        error.code === "LIMIT_FILE_SIZE"
+          ? "Uma das fotos ultrapassou o limite de 40 MB deste prototipo."
+          : error.code === "LIMIT_FILE_COUNT"
+            ? "Foram enviadas fotos demais. O limite atual e 300 fotos."
+            : `Falha no upload das fotos: ${error.message}`;
+
+      response.status(400).json({ message });
+      return;
+    }
+
+    response.status(500).json({
+      message: error instanceof Error ? error.message : "Erro inesperado no servidor.",
+    });
+  },
+);
+
 app.listen(port, () => {
   console.log(`SolarFit 3D API listening on http://127.0.0.1:${port}`);
 });
