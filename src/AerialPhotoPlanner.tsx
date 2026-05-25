@@ -213,8 +213,8 @@ export default function AerialPhotoPlanner({ selectedPanel }: AerialPhotoPlanner
           <div className="aerial-instructions">
             <strong>{imageName}</strong>
             <p>
-              Clique nos cantos da casa/telhado principal. Use 4 a 8 pontos ao redor da area que
-              interessa. Depois clique em detectar.
+              Clique nos 4 cantos do telhado que voce quer preencher. O sistema agora usa esses
+              pontos como o plano principal e encaixa as placas acompanhando a perspectiva.
             </p>
           </div>
 
@@ -322,46 +322,47 @@ function createRoofCandidates(points: Point[]): RoofCandidate[] {
   const insetY = height * 0.04;
   const midY = bounds.minY + height * 0.52;
   const midX = bounds.minX + width * 0.5;
+  const selectedPolygon = pointsToRoofQuad(points);
+  const selectedBounds = getBounds(selectedPolygon);
+  const selectedWidth = selectedBounds.maxX - selectedBounds.minX;
+  const selectedHeight = selectedBounds.maxY - selectedBounds.minY;
+  const splitTop = [
+    interpolateQuad(selectedPolygon, 0, 0),
+    interpolateQuad(selectedPolygon, 1, 0),
+    interpolateQuad(selectedPolygon, 1, 0.5),
+    interpolateQuad(selectedPolygon, 0, 0.5),
+  ] as [Point, Point, Point, Point];
+  const splitBottom = [
+    interpolateQuad(selectedPolygon, 0, 0.5),
+    interpolateQuad(selectedPolygon, 1, 0.5),
+    interpolateQuad(selectedPolygon, 1, 1),
+    interpolateQuad(selectedPolygon, 0, 1),
+  ] as [Point, Point, Point, Point];
 
   return [
     {
-      id: "full-roof",
-      name: "Area principal da casa",
-      confidence: 0.82,
+      id: "selected-roof",
+      name: "Area marcada pelo vendedor",
+      confidence: points.length === 4 ? 0.92 : 0.78,
       lengthFactor: 1,
       widthFactor: 1,
-      polygon: [
-        { x: bounds.minX + insetX, y: bounds.minY + insetY },
-        { x: bounds.maxX - insetX, y: bounds.minY + insetY },
-        { x: bounds.maxX - insetX, y: bounds.maxY - insetY },
-        { x: bounds.minX + insetX, y: bounds.maxY - insetY },
-      ],
+      polygon: selectedPolygon,
     },
     {
       id: "upper-plane",
       name: "Plano superior provavel",
       confidence: 0.68,
-      lengthFactor: 1,
+      lengthFactor: selectedWidth / Math.max(width, 1),
       widthFactor: 0.48,
-      polygon: [
-        { x: bounds.minX + insetX, y: bounds.minY + insetY },
-        { x: bounds.maxX - insetX, y: bounds.minY + insetY },
-        { x: bounds.maxX - insetX, y: midY },
-        { x: bounds.minX + insetX, y: midY },
-      ],
+      polygon: splitTop,
     },
     {
       id: "lower-plane",
       name: "Plano inferior provavel",
       confidence: 0.64,
-      lengthFactor: 1,
+      lengthFactor: selectedWidth / Math.max(width, 1),
       widthFactor: 0.48,
-      polygon: [
-        { x: bounds.minX + insetX, y: midY },
-        { x: bounds.maxX - insetX, y: midY },
-        { x: bounds.maxX - insetX, y: bounds.maxY - insetY },
-        { x: bounds.minX + insetX, y: bounds.maxY - insetY },
-      ],
+      polygon: splitBottom,
     },
     {
       id: "left-plane",
@@ -376,6 +377,20 @@ function createRoofCandidates(points: Point[]): RoofCandidate[] {
         { x: bounds.minX + insetX, y: bounds.maxY - insetY },
       ],
     },
+  ];
+}
+
+function pointsToRoofQuad(points: Point[]): [Point, Point, Point, Point] {
+  if (points.length === 4) {
+    return points as [Point, Point, Point, Point];
+  }
+
+  const bounds = getBounds(points);
+  return [
+    { x: bounds.minX, y: bounds.minY },
+    { x: bounds.maxX, y: bounds.minY },
+    { x: bounds.maxX, y: bounds.maxY },
+    { x: bounds.minX, y: bounds.maxY },
   ];
 }
 
