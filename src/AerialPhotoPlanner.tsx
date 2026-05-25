@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { MouseEvent } from "react";
+import CleanTechnicalModelViewer from "./CleanTechnicalModelViewer";
 import { calculateLayout } from "./layoutCalculator";
 import type { SolarPanel } from "./types";
 
@@ -8,9 +9,9 @@ type Point = {
   y: number;
 };
 
-type OrientationMode = "auto" | "portrait" | "landscape";
+export type OrientationMode = "auto" | "portrait" | "landscape";
 
-type RoofArea = {
+export type RoofArea = {
   id: string;
   name: string;
   polygon: [Point, Point, Point, Point];
@@ -426,6 +427,25 @@ export default function AerialPhotoPlanner({ selectedPanel }: AerialPhotoPlanner
           </label>
         </aside>
       </div>
+
+      {roofAreas.length > 0 && (
+        <div className="clean-model-section">
+          <div>
+            <h3>Modelo tecnico 3D limpo</h3>
+            <p className="helper">
+              Esta visualizacao redesenha os panos selecionados como superficies tecnicas limpas,
+              usando a inclinacao detectada no render. E aqui que as placas devem ficar no produto final.
+            </p>
+          </div>
+          <CleanTechnicalModelViewer
+            areas={roofAreas}
+            gapMeters={gapMeters}
+            orientation={orientation}
+            selectedPanel={selectedPanel}
+            setbackMeters={setbackMeters}
+          />
+        </div>
+      )}
     </section>
   );
 }
