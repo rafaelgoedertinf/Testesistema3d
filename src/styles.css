@@ -707,6 +707,58 @@ select:focus {
   margin-bottom: 0;
 }
 
+.render-plane-list {
+  display: grid;
+  gap: 8px;
+  border-radius: 16px;
+  background: #f7f9ff;
+  border: 1px solid #d7e2ff;
+  padding: 12px;
+}
+
+.render-plane-list > strong {
+  color: #173a73;
+}
+
+.render-plane-list p {
+  color: #526159;
+  font-size: 0.86rem;
+  line-height: 1.4;
+  margin-bottom: 2px;
+}
+
+.render-plane-list button {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 10px;
+  align-items: center;
+  border: 1px solid #d7e2ff;
+  border-radius: 12px;
+  background: #fff;
+  color: #173a73;
+  padding: 10px;
+  text-align: left;
+}
+
+.render-plane-list button.selected {
+  border-color: #173f2a;
+  background: #e7f5ec;
+  color: #173f2a;
+}
+
+.render-plane-list button span {
+  font-weight: 800;
+}
+
+.render-plane-list button b {
+  font-size: 1rem;
+}
+
+.render-plane-list button small {
+  color: #617067;
+  grid-column: 1 / -1;
+}
+
 .danger-action {
   border: 0;
   border-radius: 14px;

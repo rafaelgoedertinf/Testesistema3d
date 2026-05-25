@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { MouseEvent } from "react";
 import { calculateLayout } from "./layoutCalculator";
 import type { SolarPanel } from "./types";
@@ -25,6 +25,21 @@ type AerialPhotoPlannerProps = {
   selectedPanel: SolarPanel;
 };
 
+type RenderSlopePlane = {
+  id: string;
+  name: string;
+  slopeDegrees: number;
+  confidence: number;
+  pointCount: number;
+};
+
+type RenderSlopeAnalysis = {
+  available: boolean;
+  source?: string;
+  note?: string;
+  planes: RenderSlopePlane[];
+};
+
 const demoImageUrl = "/api/odm-test/files/images/image_001.jpg";
 
 export default function AerialPhotoPlanner({ selectedPanel }: AerialPhotoPlannerProps) {
@@ -38,6 +53,7 @@ export default function AerialPhotoPlanner({ selectedPanel }: AerialPhotoPlanner
   const [gapMeters, setGapMeters] = useState(0.04);
   const [newAreaLengthMeters, setNewAreaLengthMeters] = useState(8);
   const [newAreaWidthMeters, setNewAreaWidthMeters] = useState(4);
+  const [renderSlopeAnalysis, setRenderSlopeAnalysis] = useState<RenderSlopeAnalysis | null>(null);
 
   const selectedArea = roofAreas.find((area) => area.id === selectedAreaId) ?? roofAreas[0];
   const plannedAreas = useMemo(() => {
@@ -66,6 +82,14 @@ export default function AerialPhotoPlanner({ selectedPanel }: AerialPhotoPlanner
 
   const totalPanels = plannedAreas.reduce((total, item) => total + item.activePanelCount, 0);
   const totalKwp = (totalPanels * selectedPanel.powerWatts) / 1000;
+  const renderSlopePlanes = renderSlopeAnalysis?.planes ?? [];
+
+  useEffect(() => {
+    void fetch("/api/odm-test/slope-analysis")
+      .then((response) => response.json() as Promise<RenderSlopeAnalysis>)
+      .then((analysis) => setRenderSlopeAnalysis(analysis))
+      .catch(() => setRenderSlopeAnalysis(null));
+  }, []);
 
   function handleImageUpload(files: FileList | null) {
     const file = files?.[0];
@@ -106,7 +130,7 @@ export default function AerialPhotoPlanner({ selectedPanel }: AerialPhotoPlanner
 
     const polygon = selectionPoints as [Point, Point, Point, Point];
     const nextIndex = roofAreas.length + 1;
-    const slopeDegrees = estimateSlopeFromRender(polygon, nextIndex);
+    const slopeDegrees = renderSlopePlanes[0]?.slopeDegrees ?? estimateSlopeFromRender(polygon, nextIndex);
     const area: RoofArea = {
       id: `roof-area-${Date.now()}`,
       name: `Pano ${nextIndex}`,
@@ -303,6 +327,25 @@ export default function AerialPhotoPlanner({ selectedPanel }: AerialPhotoPlanner
                   {correctWidthForSlope(selectedArea.projectedWidthMeters, selectedArea.slopeDegrees).toFixed(2)} m.
                 </p>
               </div>
+
+              {renderSlopePlanes.length > 0 && (
+                <div className="render-plane-list">
+                  <strong>Planos identificados no render</strong>
+                  <p>Escolha o plano que mais parece com este pano do telhado.</p>
+                  {renderSlopePlanes.map((plane) => (
+                    <button
+                      key={plane.id}
+                      type="button"
+                      className={selectedArea.slopeDegrees === plane.slopeDegrees ? "selected" : ""}
+                      onClick={() => updateSelectedArea({ slopeDegrees: plane.slopeDegrees })}
+                    >
+                      <span>{plane.name}</span>
+                      <b>{plane.slopeDegrees} deg</b>
+                      <small>{plane.pointCount.toLocaleString("pt-BR")} pontos</small>
+                    </button>
+                  ))}
+                </div>
+              )}
 
               <div className="inline-fields">
                 <label>

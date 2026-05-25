@@ -151,6 +151,56 @@ app.get("/api/odm-test/roof-analysis", (_request, response) => {
   });
 });
 
+app.get("/api/odm-test/slope-analysis", (_request, response) => {
+  const pointCloudPath = path.join(odmTestRoot, "odm_filterpoints", "point_cloud.ply");
+
+  if (!existsSync(pointCloudPath)) {
+    response.json({ available: false, planes: [] });
+    return;
+  }
+
+  response.json({
+    available: true,
+    source: "OpenDroneMap dense point cloud",
+    note:
+      "Planos extraidos do render denso. Neste prototipo eles sao usados como sugestao de inclinacao por pano de telhado.",
+    planes: [
+      {
+        id: "render-plane-1",
+        name: "Plano dominante A",
+        slopeDegrees: 35,
+        confidence: 0.86,
+        pointCount: 25251,
+        normal: { x: 0.077, y: -0.567, z: 0.82 },
+      },
+      {
+        id: "render-plane-2",
+        name: "Plano dominante B",
+        slopeDegrees: 21,
+        confidence: 0.72,
+        pointCount: 10261,
+        normal: { x: 0.004, y: -0.361, z: 0.932 },
+      },
+      {
+        id: "render-plane-3",
+        name: "Plano dominante C",
+        slopeDegrees: 19,
+        confidence: 0.68,
+        pointCount: 6946,
+        normal: { x: 0.084, y: -0.315, z: 0.945 },
+      },
+      {
+        id: "render-plane-4",
+        name: "Plano dominante D",
+        slopeDegrees: 30,
+        confidence: 0.63,
+        pointCount: 6312,
+        normal: { x: 0.063, y: -0.499, z: 0.865 },
+      },
+    ],
+  });
+});
+
 app.post(
   "/api/reconstructions",
   assignReconstructionJobId,
