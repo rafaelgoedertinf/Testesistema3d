@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { calculateLayout, calculateScaleFactor } from "./layoutCalculator";
+import PointCloudViewer from "./PointCloudViewer";
 import type { CustomerProject, RoofSettings, ScaleReference, SolarPanel } from "./types";
 
 const STORAGE_KEY = "solarfit-3d-mvp-state";
@@ -142,6 +143,7 @@ export default function App() {
   const scaleFactor = calculateScaleFactor(scale.modelDistance, scale.realDistanceMeters);
   const projectIsValid = project.customerName.trim().length > 0 && project.phone.trim().length > 0;
   const totalPhotoSizeMb = photoFiles.reduce((total, file) => total + file.size, 0) / 1024 / 1024;
+  const pointCloudFile = reconstructionJob?.outputFiles.find((file) => file.endsWith(".ply"));
 
   useEffect(() => {
     const validIds = new Set(gridPanelIds);
@@ -394,6 +396,14 @@ export default function App() {
                     </li>
                   ))}
                 </ul>
+              )}
+              {reconstructionJob.status === "completed" && pointCloudFile && (
+                <div className="viewer-block">
+                  <strong>Previa 3D da nuvem de pontos</strong>
+                  <PointCloudViewer
+                    url={`/api/reconstructions/${reconstructionJob.id}/files/${pointCloudFile}`}
+                  />
+                </div>
               )}
             </div>
           )}

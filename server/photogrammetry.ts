@@ -87,12 +87,16 @@ export async function runPhotogrammetry(job: ReconstructionJob) {
       job.inputDirectory,
       "--ImageReader.single_camera",
       "1",
+      "--SiftExtraction.use_gpu",
+      "0",
     ]);
 
     await runColmapStep(job, "Comparando fotos", [
       "exhaustive_matcher",
       "--database_path",
       databasePath,
+      "--SiftMatching.use_gpu",
+      "0",
     ]);
 
     await runColmapStep(job, "Reconstruindo cameras e pontos", [
@@ -118,7 +122,8 @@ export async function runPhotogrammetry(job: ReconstructionJob) {
     updateJob(job.id, {
       status: "completed",
       currentStep: "Reconstrucao concluida",
-      message: "Nuvem de pontos 3D gerada com sucesso.",
+      message:
+        "Nuvem de pontos 3D inicial gerada com sucesso. Esta versao esparsa valida a reconstrucao; a malha densa sera a proxima evolucao.",
       outputFiles: ["sparse-point-cloud.ply"],
     });
   } catch (error) {

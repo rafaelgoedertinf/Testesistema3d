@@ -62,14 +62,22 @@ Estado atual:
 
 - upload real de fotos implementado;
 - API local cria tarefas de reconstrucao;
-- pipeline preparado para executar COLMAP quando ele estiver instalado;
+- pipeline executa COLMAP quando ele esta instalado;
+- extracao e matching rodam sem GPU usando flags de CPU;
+- o resultado atual e uma nuvem de pontos esparsa `.ply`;
 - se COLMAP nao existir no ambiente, a tarefa informa erro tecnico claro `ENGINE_MISSING`.
+
+Validacao inicial:
+
+- conjunto com 24 fotos e aproximadamente 41 MB processou com sucesso;
+- resultado gerado: `sparse-point-cloud.ply`;
+- a etapa densa do COLMAP neste ambiente Linux falhou porque o pacote disponivel exige CUDA para stereo denso.
 
 Proxima etapa tecnica:
 
-1. instalar/testar COLMAP no Mac;
-2. validar geracao de nuvem de pontos `.ply` com fotos reais de drone;
-3. exibir o arquivo `.ply` no visualizador 3D;
+1. testar a nuvem de pontos no visualizador 3D com fotos reais de drone;
+2. estudar OpenDroneMap/OpenMVS para malha densa sem depender de CUDA;
+3. calibrar escala e medidas sobre o resultado 3D;
 4. evoluir de nuvem de pontos para malha/textura quando a base estiver validada.
 
 ### Instalador macOS

@@ -25,6 +25,13 @@ Requisitos:
 
 - Node.js 22 ou superior
 - npm
+- COLMAP para gerar a nuvem de pontos 3D
+
+No macOS, o COLMAP pode ser instalado para desenvolvimento com:
+
+```bash
+brew install colmap
+```
 
 Instalação:
 
