@@ -128,7 +128,7 @@ export default function AerialPhotoPlanner({ selectedPanel }: AerialPhotoPlanner
       return;
     }
 
-    const polygon = selectionPoints as [Point, Point, Point, Point];
+    const polygon = normalizeRoofQuad(selectionPoints as [Point, Point, Point, Point]);
     const nextIndex = roofAreas.length + 1;
     const slopeDegrees = renderSlopePlanes[0]?.slopeDegrees ?? estimateSlopeFromRender(polygon, nextIndex);
     const area: RoofArea = {
@@ -466,6 +466,13 @@ function buildPanelPolygons(
   }
 
   return panels;
+}
+
+function normalizeRoofQuad(points: [Point, Point, Point, Point]): [Point, Point, Point, Point] {
+  const sortedByY = [...points].sort((a, b) => a.y - b.y);
+  const top = sortedByY.slice(0, 2).sort((a, b) => a.x - b.x);
+  const bottom = sortedByY.slice(2, 4).sort((a, b) => a.x - b.x);
+  return [top[0], top[1], bottom[1], bottom[0]];
 }
 
 function correctWidthForSlope(projectedWidthMeters: number, slopeDegrees: number) {
