@@ -561,6 +561,20 @@ select:focus {
   stroke-width: 0.35;
 }
 
+.roof-area.active .roof-candidate-polygon {
+  stroke: #ffffff;
+  stroke-width: 0.65;
+}
+
+.roof-area-label {
+  fill: #ffffff;
+  font-size: 2.2px;
+  font-weight: 800;
+  paint-order: stroke;
+  stroke: rgba(0, 0, 0, 0.65);
+  stroke-width: 0.5px;
+}
+
 .aerial-instructions {
   border-radius: 16px;
   background: #e8f1ff;
@@ -673,6 +687,33 @@ select:focus {
 
 .auto-notes p:last-child {
   margin-bottom: 0;
+}
+
+.render-assist-box {
+  border-radius: 16px;
+  background: #eef4ff;
+  color: #173a73;
+  padding: 12px;
+}
+
+.render-assist-box strong {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.render-assist-box p {
+  font-size: 0.9rem;
+  line-height: 1.45;
+  margin-bottom: 0;
+}
+
+.danger-action {
+  border: 0;
+  border-radius: 14px;
+  background: #ffe5e5;
+  color: #8f1d1d;
+  font-weight: 800;
+  padding: 11px 14px;
 }
 
 .summary-grid {

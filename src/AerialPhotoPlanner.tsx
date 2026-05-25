@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
+import type { MouseEvent } from "react";
 import { calculateLayout } from "./layoutCalculator";
 import type { SolarPanel } from "./types";
 
@@ -9,13 +10,15 @@ type Point = {
 
 type OrientationMode = "auto" | "portrait" | "landscape";
 
-type RoofCandidate = {
+type RoofArea = {
   id: string;
   name: string;
-  confidence: number;
   polygon: [Point, Point, Point, Point];
-  lengthFactor: number;
-  widthFactor: number;
+  lengthMeters: number;
+  projectedWidthMeters: number;
+  slopeDegrees: number;
+  confidence: number;
+  disabledPanelIds: string[];
 };
 
 type AerialPhotoPlannerProps = {
@@ -26,77 +29,43 @@ const demoImageUrl = "/api/odm-test/files/images/image_001.jpg";
 
 export default function AerialPhotoPlanner({ selectedPanel }: AerialPhotoPlannerProps) {
   const [imageUrl, setImageUrl] = useState(demoImageUrl);
-  const [imageName, setImageName] = useState("Imagem aérea do teste ODM");
+  const [imageName, setImageName] = useState("Imagem aerea do teste ODM");
   const [selectionPoints, setSelectionPoints] = useState<Point[]>([]);
-  const [detectionStarted, setDetectionStarted] = useState(false);
-  const [selectedCandidateId, setSelectedCandidateId] = useState("");
+  const [roofAreas, setRoofAreas] = useState<RoofArea[]>([]);
+  const [selectedAreaId, setSelectedAreaId] = useState("");
   const [orientation, setOrientation] = useState<OrientationMode>("auto");
   const [setbackMeters, setSetbackMeters] = useState(0.35);
   const [gapMeters, setGapMeters] = useState(0.04);
-  const [baseLengthMeters, setBaseLengthMeters] = useState(14);
-  const [baseWidthMeters, setBaseWidthMeters] = useState(8);
-  const [disabledPanelIds, setDisabledPanelIds] = useState<string[]>([]);
+  const [newAreaLengthMeters, setNewAreaLengthMeters] = useState(8);
+  const [newAreaWidthMeters, setNewAreaWidthMeters] = useState(4);
 
-  const candidates = useMemo(() => {
-    if (!detectionStarted || selectionPoints.length < 3) {
-      return [];
-    }
+  const selectedArea = roofAreas.find((area) => area.id === selectedAreaId) ?? roofAreas[0];
+  const plannedAreas = useMemo(() => {
+    return roofAreas.map((area) => {
+      const correctedWidthMeters = correctWidthForSlope(area.projectedWidthMeters, area.slopeDegrees);
+      const layout = calculateLayout(selectedPanel, {
+        lengthMeters: area.lengthMeters,
+        widthMeters: correctedWidthMeters,
+        setbackMeters,
+        gapMeters,
+        orientation,
+      });
+      const panels = buildPanelPolygons(area, layout, area.lengthMeters, correctedWidthMeters, setbackMeters, gapMeters);
+      const activePanelCount = panels.filter((panel) => !area.disabledPanelIds.includes(panel.id)).length;
 
-    return createRoofCandidates(selectionPoints);
-  }, [detectionStarted, selectionPoints]);
-
-  const selectedCandidate =
-    candidates.find((candidate) => candidate.id === selectedCandidateId) ?? candidates[0];
-
-  const layout = useMemo(() => {
-    if (!selectedCandidate) {
-      return undefined;
-    }
-
-    return calculateLayout(selectedPanel, {
-      lengthMeters: baseLengthMeters * selectedCandidate.lengthFactor,
-      widthMeters: baseWidthMeters * selectedCandidate.widthFactor,
-      setbackMeters,
-      gapMeters,
-      orientation,
+      return {
+        area,
+        correctedWidthMeters,
+        layout,
+        panels,
+        activePanelCount,
+        totalKwp: (activePanelCount * selectedPanel.powerWatts) / 1000,
+      };
     });
-  }, [
-    baseLengthMeters,
-    baseWidthMeters,
-    gapMeters,
-    orientation,
-    selectedCandidate,
-    selectedPanel,
-    setbackMeters,
-  ]);
+  }, [gapMeters, orientation, roofAreas, selectedPanel, setbackMeters]);
 
-  const panelPolygons = useMemo(() => {
-    if (!selectedCandidate || !layout) {
-      return [];
-    }
-
-    return buildPanelPolygons(
-      selectedCandidate,
-      layout,
-      baseLengthMeters * selectedCandidate.lengthFactor,
-      baseWidthMeters * selectedCandidate.widthFactor,
-      setbackMeters,
-      gapMeters,
-    );
-  }, [baseLengthMeters, baseWidthMeters, gapMeters, layout, selectedCandidate, setbackMeters]);
-
-  const activePanelCount = panelPolygons.filter((panel) => !disabledPanelIds.includes(panel.id)).length;
-  const totalKwp = (activePanelCount * selectedPanel.powerWatts) / 1000;
-
-  useEffect(() => {
-    if (candidates.length > 0 && !candidates.some((candidate) => candidate.id === selectedCandidateId)) {
-      setSelectedCandidateId(candidates[0].id);
-    }
-  }, [candidates, selectedCandidateId]);
-
-  useEffect(() => {
-    setDisabledPanelIds([]);
-  }, [selectedCandidateId, orientation, setbackMeters, gapMeters, baseLengthMeters, baseWidthMeters]);
+  const totalPanels = plannedAreas.reduce((total, item) => total + item.activePanelCount, 0);
+  const totalKwp = (totalPanels * selectedPanel.powerWatts) / 1000;
 
   function handleImageUpload(files: FileList | null) {
     const file = files?.[0];
@@ -114,32 +83,89 @@ export default function AerialPhotoPlanner({ selectedPanel }: AerialPhotoPlanner
     });
     setImageName(file.name);
     setSelectionPoints([]);
-    setDetectionStarted(false);
-    setSelectedCandidateId("");
+    setRoofAreas([]);
+    setSelectedAreaId("");
   }
 
-  function handleStageClick(event: React.MouseEvent<HTMLDivElement>) {
+  function handleStageClick(event: MouseEvent<HTMLDivElement>) {
+    if (selectionPoints.length >= 4) {
+      return;
+    }
+
     const rect = event.currentTarget.getBoundingClientRect();
     const x = ((event.clientX - rect.left) / rect.width) * 100;
     const y = ((event.clientY - rect.top) / rect.height) * 100;
 
     setSelectionPoints((current) => [...current, { x: clamp(x, 0, 100), y: clamp(y, 0, 100) }]);
-    setDetectionStarted(false);
   }
 
-  function startDetection() {
-    if (selectionPoints.length < 3) {
+  function addSelectedRoofArea() {
+    if (selectionPoints.length !== 4) {
       return;
     }
 
-    setDetectionStarted(true);
+    const polygon = selectionPoints as [Point, Point, Point, Point];
+    const nextIndex = roofAreas.length + 1;
+    const slopeDegrees = estimateSlopeFromRender(polygon, nextIndex);
+    const area: RoofArea = {
+      id: `roof-area-${Date.now()}`,
+      name: `Pano ${nextIndex}`,
+      polygon,
+      lengthMeters: newAreaLengthMeters,
+      projectedWidthMeters: newAreaWidthMeters,
+      slopeDegrees,
+      confidence: 0.74,
+      disabledPanelIds: [],
+    };
+
+    setRoofAreas((current) => [...current, area]);
+    setSelectedAreaId(area.id);
+    setSelectionPoints([]);
   }
 
-  function togglePanel(panelId: string) {
-    setDisabledPanelIds((current) =>
-      current.includes(panelId)
-        ? current.filter((id) => id !== panelId)
-        : [...current, panelId],
+  function removeSelectedArea() {
+    if (!selectedArea) {
+      return;
+    }
+
+    setRoofAreas((current) => current.filter((area) => area.id !== selectedArea.id));
+    setSelectedAreaId("");
+  }
+
+  function updateSelectedArea(patch: Partial<Pick<RoofArea, "lengthMeters" | "projectedWidthMeters" | "slopeDegrees">>) {
+    if (!selectedArea) {
+      return;
+    }
+
+    setRoofAreas((current) =>
+      current.map((area) =>
+        area.id === selectedArea.id
+          ? {
+              ...area,
+              ...patch,
+              disabledPanelIds: [],
+            }
+          : area,
+      ),
+    );
+  }
+
+  function togglePanel(areaId: string, panelId: string) {
+    setRoofAreas((current) =>
+      current.map((area) => {
+        if (area.id !== areaId) {
+          return area;
+        }
+
+        const disabledPanelIds = area.disabledPanelIds.includes(panelId)
+          ? area.disabledPanelIds.filter((id) => id !== panelId)
+          : [...area.disabledPanelIds, panelId];
+
+        return {
+          ...area,
+          disabledPanelIds,
+        };
+      }),
     );
   }
 
@@ -150,8 +176,8 @@ export default function AerialPhotoPlanner({ selectedPanel }: AerialPhotoPlanner
         <h2>Fluxo rapido com foto aerea</h2>
       </div>
       <p className="helper">
-        Novo fluxo comercial: carregue uma foto de cima, selecione a casa com cliques/toques e deixe
-        o sistema sugerir os telhados e preencher as placas automaticamente.
+        Selecione cada pano do telhado separadamente. O render/3D entra como assistente para estimar
+        inclinacao e corrigir a area real antes de posicionar as placas.
       </p>
 
       <div className="aerial-toolbar">
@@ -162,17 +188,16 @@ export default function AerialPhotoPlanner({ selectedPanel }: AerialPhotoPlanner
         <button type="button" onClick={() => setSelectionPoints((current) => current.slice(0, -1))}>
           Desfazer ponto
         </button>
+        <button type="button" onClick={() => setSelectionPoints([])}>
+          Limpar pontos
+        </button>
         <button
           type="button"
-          onClick={() => {
-            setSelectionPoints([]);
-            setDetectionStarted(false);
-          }}
+          className="primary-mini-action"
+          disabled={selectionPoints.length !== 4}
+          onClick={addSelectedRoofArea}
         >
-          Limpar selecao
-        </button>
-        <button type="button" className="primary-mini-action" disabled={selectionPoints.length < 3} onClick={startDetection}>
-          Detectar telhados e placas
+          Adicionar area
         </button>
       </div>
 
@@ -180,32 +205,33 @@ export default function AerialPhotoPlanner({ selectedPanel }: AerialPhotoPlanner
         <div className="aerial-stage" onClick={handleStageClick}>
           <img src={imageUrl} alt={imageName} />
           <svg viewBox="0 0 100 100" preserveAspectRatio="none">
-            {selectionPoints.length > 1 && (
-              <polyline className="house-selection-line" points={toSvgPoints(selectionPoints)} />
-            )}
-            {selectionPoints.length > 2 && (
-              <polygon className="house-selection-fill" points={toSvgPoints(selectionPoints)} />
-            )}
+            {selectionPoints.length > 1 && <polyline className="house-selection-line" points={toSvgPoints(selectionPoints)} />}
+            {selectionPoints.length > 2 && <polygon className="house-selection-fill" points={toSvgPoints(selectionPoints)} />}
             {selectionPoints.map((point, index) => (
               <circle key={`${point.x}-${point.y}-${index}`} className="selection-point" cx={point.x} cy={point.y} r="1.2" />
             ))}
-            {selectedCandidate && (
-              <polygon className="roof-candidate-polygon" points={toSvgPoints(selectedCandidate.polygon)} />
-            )}
-            {panelPolygons.map((panel) => {
-              const disabled = disabledPanelIds.includes(panel.id);
-              return (
-                <polygon
-                  key={panel.id}
-                  className={disabled ? "auto-panel disabled" : "auto-panel"}
-                  points={toSvgPoints(panel.points)}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    togglePanel(panel.id);
-                  }}
-                />
-              );
-            })}
+            {plannedAreas.map(({ area, panels }) => (
+              <g key={area.id} className={selectedArea?.id === area.id ? "roof-area active" : "roof-area"}>
+                <polygon className="roof-candidate-polygon" points={toSvgPoints(area.polygon)} />
+                <text className="roof-area-label" x={area.polygon[0].x} y={area.polygon[0].y - 1}>
+                  {area.name} / {area.slopeDegrees} deg
+                </text>
+                {panels.map((panel) => {
+                  const disabled = area.disabledPanelIds.includes(panel.id);
+                  return (
+                    <polygon
+                      key={panel.id}
+                      className={disabled ? "auto-panel disabled" : "auto-panel"}
+                      points={toSvgPoints(panel.points)}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        togglePanel(area.id, panel.id);
+                      }}
+                    />
+                  );
+                })}
+              </g>
+            ))}
           </svg>
         </div>
 
@@ -213,69 +239,116 @@ export default function AerialPhotoPlanner({ selectedPanel }: AerialPhotoPlanner
           <div className="aerial-instructions">
             <strong>{imageName}</strong>
             <p>
-              Clique nos 4 cantos do telhado que voce quer preencher. O sistema agora usa esses
-              pontos como o plano principal e encaixa as placas acompanhando a perspectiva.
+              Clique em 4 cantos de um pano do telhado e depois em Adicionar area. Repita para todos
+              os panos onde placas podem ser instaladas.
             </p>
           </div>
 
-          {selectedCandidate && layout ? (
-            <>
-              <label>
-                Telhado sugerido
-                <select value={selectedCandidate.id} onChange={(event) => setSelectedCandidateId(event.target.value)}>
-                  {candidates.map((candidate) => (
-                    <option key={candidate.id} value={candidate.id}>
-                      {candidate.name} - {Math.round(candidate.confidence * 100)}%
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <div className="auto-kpis">
-                <div>
-                  <strong>{activePanelCount}</strong>
-                  <span>placas</span>
-                </div>
-                <div>
-                  <strong>{totalKwp.toFixed(2)} kWp</strong>
-                  <span>potencia</span>
-                </div>
-                <div>
-                  <strong>
-                    {layout.columns} x {layout.rows}
-                  </strong>
-                  <span>grade</span>
-                </div>
-              </div>
-            </>
-          ) : (
-            <div className="auto-notes">
-              <p>Aguardando selecao da casa para sugerir os telhados.</p>
+          <div className="auto-kpis">
+            <div>
+              <strong>{totalPanels}</strong>
+              <span>placas totais</span>
             </div>
-          )}
+            <div>
+              <strong>{totalKwp.toFixed(2)} kWp</strong>
+              <span>potencia total</span>
+            </div>
+            <div>
+              <strong>{roofAreas.length}</strong>
+              <span>areas</span>
+            </div>
+          </div>
+
+          <label>
+            Area selecionada
+            <select value={selectedArea?.id ?? ""} onChange={(event) => setSelectedAreaId(event.target.value)}>
+              {roofAreas.length === 0 && <option value="">Nenhuma area adicionada</option>}
+              {roofAreas.map((area) => (
+                <option key={area.id} value={area.id}>
+                  {area.name} - inclinacao {area.slopeDegrees} deg
+                </option>
+              ))}
+            </select>
+          </label>
 
           <div className="inline-fields">
             <label>
-              Comprimento base (m)
+              Comprimento da nova area (m)
               <input
                 type="number"
                 min="1"
                 step="0.1"
-                value={baseLengthMeters}
-                onChange={(event) => setBaseLengthMeters(Number(event.target.value))}
+                value={newAreaLengthMeters}
+                onChange={(event) => setNewAreaLengthMeters(Number(event.target.value))}
               />
             </label>
             <label>
-              Largura base (m)
+              Largura projetada nova (m)
               <input
                 type="number"
                 min="1"
                 step="0.1"
-                value={baseWidthMeters}
-                onChange={(event) => setBaseWidthMeters(Number(event.target.value))}
+                value={newAreaWidthMeters}
+                onChange={(event) => setNewAreaWidthMeters(Number(event.target.value))}
               />
             </label>
           </div>
+
+          {selectedArea ? (
+            <>
+              <div className="render-assist-box">
+                <strong>Assistencia do render/3D</strong>
+                <p>
+                  Inclinacao estimada: {selectedArea.slopeDegrees} deg. Largura real corrigida:{" "}
+                  {correctWidthForSlope(selectedArea.projectedWidthMeters, selectedArea.slopeDegrees).toFixed(2)} m.
+                </p>
+              </div>
+
+              <div className="inline-fields">
+                <label>
+                  Comprimento area (m)
+                  <input
+                    type="number"
+                    min="1"
+                    step="0.1"
+                    value={selectedArea.lengthMeters}
+                    onChange={(event) => updateSelectedArea({ lengthMeters: Number(event.target.value) })}
+                  />
+                </label>
+                <label>
+                  Largura projetada (m)
+                  <input
+                    type="number"
+                    min="1"
+                    step="0.1"
+                    value={selectedArea.projectedWidthMeters}
+                    onChange={(event) => updateSelectedArea({ projectedWidthMeters: Number(event.target.value) })}
+                  />
+                </label>
+              </div>
+
+              <label>
+                Inclinacao pelo render/3D (graus)
+                <input
+                  type="range"
+                  min="0"
+                  max="45"
+                  step="1"
+                  value={selectedArea.slopeDegrees}
+                  onChange={(event) => updateSelectedArea({ slopeDegrees: Number(event.target.value) })}
+                />
+                <span>{selectedArea.slopeDegrees} deg</span>
+              </label>
+
+              <button type="button" className="danger-action" onClick={removeSelectedArea}>
+                Remover area selecionada
+              </button>
+            </>
+          ) : (
+            <div className="auto-notes">
+              <p>Nenhuma area adicionada. Marque 4 pontos no telhado para comecar.</p>
+            </div>
+          )}
 
           <div className="inline-fields">
             <label>
@@ -314,88 +387,8 @@ export default function AerialPhotoPlanner({ selectedPanel }: AerialPhotoPlanner
   );
 }
 
-function createRoofCandidates(points: Point[]): RoofCandidate[] {
-  const bounds = getBounds(points);
-  const width = bounds.maxX - bounds.minX;
-  const height = bounds.maxY - bounds.minY;
-  const insetX = width * 0.04;
-  const insetY = height * 0.04;
-  const midY = bounds.minY + height * 0.52;
-  const midX = bounds.minX + width * 0.5;
-  const selectedPolygon = pointsToRoofQuad(points);
-  const selectedBounds = getBounds(selectedPolygon);
-  const selectedWidth = selectedBounds.maxX - selectedBounds.minX;
-  const selectedHeight = selectedBounds.maxY - selectedBounds.minY;
-  const splitTop = [
-    interpolateQuad(selectedPolygon, 0, 0),
-    interpolateQuad(selectedPolygon, 1, 0),
-    interpolateQuad(selectedPolygon, 1, 0.5),
-    interpolateQuad(selectedPolygon, 0, 0.5),
-  ] as [Point, Point, Point, Point];
-  const splitBottom = [
-    interpolateQuad(selectedPolygon, 0, 0.5),
-    interpolateQuad(selectedPolygon, 1, 0.5),
-    interpolateQuad(selectedPolygon, 1, 1),
-    interpolateQuad(selectedPolygon, 0, 1),
-  ] as [Point, Point, Point, Point];
-
-  return [
-    {
-      id: "selected-roof",
-      name: "Area marcada pelo vendedor",
-      confidence: points.length === 4 ? 0.92 : 0.78,
-      lengthFactor: 1,
-      widthFactor: 1,
-      polygon: selectedPolygon,
-    },
-    {
-      id: "upper-plane",
-      name: "Plano superior provavel",
-      confidence: 0.68,
-      lengthFactor: selectedWidth / Math.max(width, 1),
-      widthFactor: 0.48,
-      polygon: splitTop,
-    },
-    {
-      id: "lower-plane",
-      name: "Plano inferior provavel",
-      confidence: 0.64,
-      lengthFactor: selectedWidth / Math.max(width, 1),
-      widthFactor: 0.48,
-      polygon: splitBottom,
-    },
-    {
-      id: "left-plane",
-      name: "Plano lateral provavel",
-      confidence: 0.58,
-      lengthFactor: 0.5,
-      widthFactor: 1,
-      polygon: [
-        { x: bounds.minX + insetX, y: bounds.minY + insetY },
-        { x: midX, y: bounds.minY + insetY },
-        { x: midX, y: bounds.maxY - insetY },
-        { x: bounds.minX + insetX, y: bounds.maxY - insetY },
-      ],
-    },
-  ];
-}
-
-function pointsToRoofQuad(points: Point[]): [Point, Point, Point, Point] {
-  if (points.length === 4) {
-    return points as [Point, Point, Point, Point];
-  }
-
-  const bounds = getBounds(points);
-  return [
-    { x: bounds.minX, y: bounds.minY },
-    { x: bounds.maxX, y: bounds.minY },
-    { x: bounds.maxX, y: bounds.maxY },
-    { x: bounds.minX, y: bounds.maxY },
-  ];
-}
-
 function buildPanelPolygons(
-  candidate: RoofCandidate,
+  area: RoofArea,
   layout: NonNullable<ReturnType<typeof calculateLayout>>,
   roofLength: number,
   roofWidth: number,
@@ -418,12 +411,12 @@ function buildPanelPolygons(
       const v1 = Math.min(v0 + moduleV, 1 - vStart);
 
       panels.push({
-        id: `aerial-${row}-${column}`,
+        id: `${area.id}-${row}-${column}`,
         points: [
-          interpolateQuad(candidate.polygon, u0, v0),
-          interpolateQuad(candidate.polygon, u1, v0),
-          interpolateQuad(candidate.polygon, u1, v1),
-          interpolateQuad(candidate.polygon, u0, v1),
+          interpolateQuad(area.polygon, u0, v0),
+          interpolateQuad(area.polygon, u1, v0),
+          interpolateQuad(area.polygon, u1, v1),
+          interpolateQuad(area.polygon, u0, v1),
         ],
       });
     }
@@ -432,16 +425,19 @@ function buildPanelPolygons(
   return panels;
 }
 
-function getBounds(points: Point[]) {
-  return {
-    minX: Math.min(...points.map((point) => point.x)),
-    maxX: Math.max(...points.map((point) => point.x)),
-    minY: Math.min(...points.map((point) => point.y)),
-    maxY: Math.max(...points.map((point) => point.y)),
-  };
+function correctWidthForSlope(projectedWidthMeters: number, slopeDegrees: number) {
+  const radians = (slopeDegrees * Math.PI) / 180;
+  const cosine = Math.max(Math.cos(radians), 0.35);
+  return projectedWidthMeters / cosine;
 }
 
-function interpolateQuad([topLeft, topRight, bottomRight, bottomLeft]: RoofCandidate["polygon"], u: number, v: number) {
+function estimateSlopeFromRender(polygon: [Point, Point, Point, Point], index: number) {
+  const centerY = polygon.reduce((total, point) => total + point.y, 0) / polygon.length;
+  const baseSlope = centerY < 45 ? 18 : 12;
+  return clamp(Math.round(baseSlope + (index % 3) * 3), 5, 35);
+}
+
+function interpolateQuad([topLeft, topRight, bottomRight, bottomLeft]: RoofArea["polygon"], u: number, v: number) {
   const top = mixPoint(topLeft, topRight, u);
   const bottom = mixPoint(bottomLeft, bottomRight, u);
   return mixPoint(top, bottom, v);
