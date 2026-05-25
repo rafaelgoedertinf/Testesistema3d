@@ -12,6 +12,18 @@ export type ReconstructionJob = {
   currentStep?: string;
   errorCode?: "ENGINE_MISSING" | "PROCESS_FAILED";
   outputFiles: string[];
+  diagnostics?: ReconstructionDiagnostics;
+};
+
+export type ReconstructionDiagnostics = {
+  pointCount?: number;
+  registeredImages?: number;
+  totalImages?: number;
+  meanReprojectionErrorPx?: number;
+  minImageWidth?: number;
+  minImageHeight?: number;
+  quality: "unknown" | "low" | "medium" | "good";
+  recommendations: string[];
 };
 
 const jobs = new Map<string, ReconstructionJob>();

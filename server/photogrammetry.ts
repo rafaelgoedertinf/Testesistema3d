@@ -38,6 +38,30 @@ function runCommand(command: string, args: string[], onOutput: (line: string) =>
   });
 }
 
+function runCommandWithOutput(command: string, args: string[]) {
+  return new Promise<string>((resolve, reject) => {
+    let output = "";
+    const child = spawn(command, args, {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    child.stdout.on("data", (chunk) => {
+      output += chunk.toString();
+    });
+    child.stderr.on("data", (chunk) => {
+      output += chunk.toString();
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) {
+        resolve(output);
+      } else {
+        reject(new Error(`${command} exited with code ${code}`));
+      }
+    });
+  });
+}
+
 async function runColmapStep(job: ReconstructionJob, step: string, args: string[]) {
   updateJob(job.id, {
     currentStep: step,
@@ -119,12 +143,18 @@ export async function runPhotogrammetry(job: ReconstructionJob) {
       "PLY",
     ]);
 
+    const diagnostics = await buildDiagnostics(job, path.join(sparsePath, "0"));
+    const qualityMessage =
+      diagnostics.quality === "low"
+        ? "A reconstrucao ficou com baixa qualidade para apresentacao ao cliente. Veja as recomendacoes abaixo."
+        : "Nuvem de pontos colorida gerada com sucesso. Esta e uma previa tecnica esparsa; ainda falta gerar superficie densa e textura para apresentacao ao cliente.";
+
     updateJob(job.id, {
       status: "completed",
       currentStep: "Reconstrucao concluida",
-      message:
-        "Nuvem de pontos colorida gerada com sucesso. Esta e uma previa tecnica esparsa; ainda falta gerar superficie densa e textura para apresentacao ao cliente.",
+      message: qualityMessage,
       outputFiles: ["sparse-point-cloud.ply"],
+      diagnostics,
     });
   } catch (error) {
     updateJob(job.id, {
@@ -134,4 +164,61 @@ export async function runPhotogrammetry(job: ReconstructionJob) {
       message: error instanceof Error ? error.message : "Erro desconhecido durante a reconstrucao.",
     });
   }
+}
+
+async function buildDiagnostics(job: ReconstructionJob, sparseModelPath: string) {
+  const analyzerOutput = await runCommandWithOutput("colmap", [
+    "model_analyzer",
+    "--path",
+    sparseModelPath,
+  ]);
+  const pointCount = parseMetric(analyzerOutput, /Points:\s+(\d+)/);
+  const registeredImages = parseMetric(analyzerOutput, /Registered images:\s+(\d+)/);
+  const totalImages = parseMetric(analyzerOutput, /Images:\s+(\d+)/);
+  const meanReprojectionErrorPx = parseFloatMetric(
+    analyzerOutput,
+    /Mean reprojection error:\s+([\d.]+)px/,
+  );
+  const recommendations = [...(job.diagnostics?.recommendations ?? [])];
+
+  if (pointCount !== undefined && pointCount < 50000) {
+    recommendations.push(
+      `A nuvem gerou apenas ${pointCount.toLocaleString("pt-BR")} pontos. Para telhado apresentavel, precisamos de uma nuvem densa/malha com muito mais detalhes.`,
+    );
+  }
+
+  if (
+    totalImages !== undefined &&
+    registeredImages !== undefined &&
+    registeredImages < totalImages
+  ) {
+    recommendations.push(
+      `Somente ${registeredImages} de ${totalImages} fotos foram usadas na reconstrucao. Capture fotos com mais sobreposicao e menos mudanca brusca de angulo.`,
+    );
+  }
+
+  const quality =
+    recommendations.length > 0 || (pointCount !== undefined && pointCount < 50000)
+      ? "low"
+      : "medium";
+
+  return {
+    ...job.diagnostics,
+    pointCount,
+    registeredImages,
+    totalImages,
+    meanReprojectionErrorPx,
+    quality,
+    recommendations,
+  };
+}
+
+function parseMetric(output: string, regex: RegExp) {
+  const match = output.match(regex);
+  return match ? Number(match[1]) : undefined;
+}
+
+function parseFloatMetric(output: string, regex: RegExp) {
+  const match = output.match(regex);
+  return match ? Number.parseFloat(match[1]) : undefined;
 }

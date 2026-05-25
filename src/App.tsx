@@ -49,6 +49,16 @@ type ReconstructionJob = {
   currentStep?: string;
   errorCode?: "ENGINE_MISSING" | "PROCESS_FAILED";
   outputFiles: string[];
+  diagnostics?: {
+    pointCount?: number;
+    registeredImages?: number;
+    totalImages?: number;
+    meanReprojectionErrorPx?: number;
+    minImageWidth?: number;
+    minImageHeight?: number;
+    quality: "unknown" | "low" | "medium" | "good";
+    recommendations: string[];
+  };
 };
 
 const initialProject: CustomerProject = {
@@ -391,6 +401,55 @@ export default function App() {
                   Este ambiente de teste ainda nao tem o motor 3D instalado. No Mac, a proxima
                   etapa sera empacotar COLMAP/OpenDroneMap junto ao instalador.
                 </p>
+              )}
+              {reconstructionJob.diagnostics && (
+                <div className={`quality-report ${reconstructionJob.diagnostics.quality}`}>
+                  <strong>
+                    Qualidade da reconstrucao:{" "}
+                    {reconstructionJob.diagnostics.quality === "low"
+                      ? "baixa"
+                      : reconstructionJob.diagnostics.quality === "medium"
+                        ? "media"
+                        : reconstructionJob.diagnostics.quality === "good"
+                          ? "boa"
+                          : "em analise"}
+                  </strong>
+                  <dl>
+                    {reconstructionJob.diagnostics.registeredImages !== undefined &&
+                      reconstructionJob.diagnostics.totalImages !== undefined && (
+                        <>
+                          <dt>Fotos usadas</dt>
+                          <dd>
+                            {reconstructionJob.diagnostics.registeredImages}/
+                            {reconstructionJob.diagnostics.totalImages}
+                          </dd>
+                        </>
+                      )}
+                    {reconstructionJob.diagnostics.pointCount !== undefined && (
+                      <>
+                        <dt>Pontos 3D</dt>
+                        <dd>{reconstructionJob.diagnostics.pointCount.toLocaleString("pt-BR")}</dd>
+                      </>
+                    )}
+                    {reconstructionJob.diagnostics.minImageWidth &&
+                      reconstructionJob.diagnostics.minImageHeight && (
+                        <>
+                          <dt>Resolucao minima</dt>
+                          <dd>
+                            {reconstructionJob.diagnostics.minImageWidth}x
+                            {reconstructionJob.diagnostics.minImageHeight}
+                          </dd>
+                        </>
+                      )}
+                  </dl>
+                  {reconstructionJob.diagnostics.recommendations.length > 0 && (
+                    <ul>
+                      {reconstructionJob.diagnostics.recommendations.map((recommendation) => (
+                        <li key={recommendation}>{recommendation}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
               )}
               {reconstructionJob.outputFiles.length > 0 && (
                 <ul>

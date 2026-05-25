@@ -72,3 +72,4 @@ npm run dist:mac
 - [`docs/PRODUCT_BRIEF.md`](docs/PRODUCT_BRIEF.md) - visão do produto e MVP.
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) - arquitetura técnica planejada.
 - [`docs/MAC_TEST_GUIDE.md`](docs/MAC_TEST_GUIDE.md) - passo a passo simples para testar no Mac.
+- [`docs/DRONE_CAPTURE_GUIDE.md`](docs/DRONE_CAPTURE_GUIDE.md) - guia de captura para melhorar o 3D.

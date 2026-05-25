@@ -2,8 +2,10 @@ import cors from "cors";
 import express from "express";
 import multer from "multer";
 import { mkdir } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { imageSize } from "image-size";
 import { getJob, saveJob } from "./reconstructionStore";
 import type { ReconstructionJob } from "./reconstructionStore";
 import { runPhotogrammetry } from "./photogrammetry";
@@ -64,38 +66,41 @@ app.post(
   assignReconstructionJobId,
   upload.array("photos", 300),
   async (request: ReconstructionUploadRequest, response) => {
-  const files = (request.files ?? []) as Express.Multer.File[];
+    const files = (request.files ?? []) as Express.Multer.File[];
 
-  if (files.length < 10) {
-    response.status(400).json({
-      message: "Envie pelo menos 10 fotos para iniciar a reconstrucao 3D.",
+    if (files.length < 10) {
+      response.status(400).json({
+        message: "Envie pelo menos 10 fotos para iniciar a reconstrucao 3D.",
+      });
+      return;
+    }
+
+    const firstFile = files[0];
+    const inputDirectory = firstFile.destination;
+    const jobDirectory = path.dirname(inputDirectory);
+    const outputDirectory = path.join(jobDirectory, "output");
+    const imageDiagnostics = inspectUploadedImages(files);
+    await mkdir(outputDirectory, { recursive: true });
+
+    const job: ReconstructionJob = saveJob({
+      id: path.basename(jobDirectory),
+      status: "queued",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      photoCount: files.length,
+      inputDirectory,
+      outputDirectory,
+      message: "Fotos recebidas. A tarefa de reconstrucao 3D entrou na fila.",
+      currentStep: "Na fila",
+      outputFiles: [],
+      diagnostics: imageDiagnostics,
     });
-    return;
-  }
 
-  const firstFile = files[0];
-  const inputDirectory = firstFile.destination;
-  const jobDirectory = path.dirname(inputDirectory);
-  const outputDirectory = path.join(jobDirectory, "output");
-  await mkdir(outputDirectory, { recursive: true });
+    response.status(202).json(toPublicJob(job));
 
-  const job: ReconstructionJob = saveJob({
-    id: path.basename(jobDirectory),
-    status: "queued",
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    photoCount: files.length,
-    inputDirectory,
-    outputDirectory,
-    message: "Fotos recebidas. A tarefa de reconstrucao 3D entrou na fila.",
-    currentStep: "Na fila",
-    outputFiles: [],
-  });
-
-  response.status(202).json(toPublicJob(job));
-
-  void runPhotogrammetry(job);
-});
+    void runPhotogrammetry(job);
+  },
+);
 
 app.get("/api/reconstructions/:jobId", (request, response) => {
   const job = getJob(request.params.jobId);
@@ -166,5 +171,46 @@ function toPublicJob(job: ReconstructionJob) {
     currentStep: job.currentStep,
     errorCode: job.errorCode,
     outputFiles: job.outputFiles,
+    diagnostics: job.diagnostics,
+  };
+}
+
+function inspectUploadedImages(files: Express.Multer.File[]): ReconstructionJob["diagnostics"] {
+  const dimensions = files.flatMap((file) => {
+    try {
+      const size = imageSize(readFileSync(file.path));
+      if (!size.width || !size.height) {
+        return [];
+      }
+
+      return [{ width: size.width, height: size.height }];
+    } catch {
+      return [];
+    }
+  });
+
+  const minImageWidth =
+    dimensions.length > 0 ? Math.min(...dimensions.map((dimension) => dimension.width)) : undefined;
+  const minImageHeight =
+    dimensions.length > 0 ? Math.min(...dimensions.map((dimension) => dimension.height)) : undefined;
+  const recommendations: string[] = [];
+
+  if (minImageWidth && minImageHeight && (minImageWidth < 2000 || minImageHeight < 1500)) {
+    recommendations.push(
+      `As imagens enviadas tem resolucao minima de ${minImageWidth}x${minImageHeight}. Para 3D de telhado, prefira fotos originais do drone em alta resolucao, idealmente 12 MP ou mais.`,
+    );
+  }
+
+  if (files.length < 40) {
+    recommendations.push(
+      "Para telhados reais, use mais fotos: comece com 40 a 120 imagens com 70% a 80% de sobreposicao.",
+    );
+  }
+
+  return {
+    minImageWidth,
+    minImageHeight,
+    quality: recommendations.length > 0 ? "low" : "unknown",
+    recommendations,
   };
 }

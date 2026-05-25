@@ -305,6 +305,44 @@ select:focus {
   font-weight: 800;
 }
 
+.quality-report {
+  border-radius: 14px;
+  margin: 12px 0;
+  padding: 12px;
+}
+
+.quality-report.low {
+  background: rgba(255, 255, 255, 0.45);
+  border: 1px solid rgba(118, 80, 14, 0.24);
+}
+
+.quality-report.medium,
+.quality-report.good,
+.quality-report.unknown {
+  background: rgba(255, 255, 255, 0.45);
+  border: 1px solid rgba(22, 99, 58, 0.22);
+}
+
+.quality-report dl {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px 12px;
+  margin: 10px 0;
+}
+
+.quality-report dt {
+  font-weight: 700;
+}
+
+.quality-report dd {
+  margin: 0;
+}
+
+.quality-report ul {
+  margin: 10px 0 0;
+  padding-left: 18px;
+}
+
 .viewer-block {
   display: grid;
   gap: 10px;
