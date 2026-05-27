@@ -54,7 +54,8 @@ type Lead = {
 };
 
 type Conversation = {
-  id: number;
+  id: number | string;
+  remoteJid?: string;
   name: string;
   phone: string;
   state: string;
@@ -66,7 +67,11 @@ type Conversation = {
 };
 
 type Message = {
-  id: number;
+  id: number | string;
+  conversationId?: number | string;
+  remoteJid?: string;
+  timestamp?: number;
+  evolutionMessageId?: string;
   from: "lead" | "agent" | "system";
   body: string;
   time: string;
@@ -402,6 +407,8 @@ function App() {
   const [newTag, setNewTag] = useState("");
   const [newLead, setNewLead] = useState({ name: "", state: "", phone: "" });
   const [messageDraft, setMessageDraft] = useState("");
+  const [whatsAppSyncStatus, setWhatsAppSyncStatus] = useState("");
+  const [whatsAppBusy, setWhatsAppBusy] = useState<"" | "sync" | "send">("");
   const [agentSettings, setAgentSettings] = useState<AgentSettings>(initialAgentSettings);
   const [evolutionSettings, setEvolutionSettings] = useState<EvolutionSettings>(initialEvolutionSettings);
   const [settingsStatus, setSettingsStatus] = useState("");
@@ -652,6 +659,67 @@ function App() {
 
     setTags((current) => [...current, value]);
     setNewTag("");
+  }
+
+  async function syncWhatsApp() {
+    setWhatsAppSyncStatus("Sincronizando conversas e mensagens...");
+    setWhatsAppBusy("sync");
+
+    if (!sessionToken) {
+      setWhatsAppSyncStatus("Entre novamente para sincronizar o WhatsApp.");
+      setWhatsAppBusy("");
+      return;
+    }
+
+    try {
+      const result = await apiRequest<{
+        ok: boolean;
+        sync: { importedConversations: number; importedMessages: number; lastSyncAt: string };
+        conversations: Conversation[];
+        messages: Message[];
+      }>("/api/whatsapp/sync", { method: "POST", token: sessionToken });
+      setConversationList(result.conversations);
+      setChatMessages(result.messages);
+      setSelectedConversation((current) =>
+        result.conversations.find((conversation) => conversation.id === current.id) ?? result.conversations[0] ?? current,
+      );
+      setWhatsAppSyncStatus(
+        `Sincronizacao concluida: ${result.sync.importedConversations} conversas e ${result.sync.importedMessages} mensagens importadas.`,
+      );
+    } catch (error) {
+      setWhatsAppSyncStatus(error instanceof Error ? error.message : "Nao foi possivel sincronizar o WhatsApp.");
+    } finally {
+      setWhatsAppBusy("");
+    }
+  }
+
+  async function sendWhatsAppText() {
+    const text = messageDraft.trim();
+    const remoteJid = selectedConversation.remoteJid ?? String(selectedConversation.id);
+    if (!text || !remoteJid || !sessionToken) return;
+
+    setWhatsAppBusy("send");
+    try {
+      const result = await apiRequest<{ ok: boolean; message: Message }>("/api/whatsapp/send-text", {
+        method: "POST",
+        token: sessionToken,
+        body: JSON.stringify({ remoteJid, text }),
+      });
+      setChatMessages((current) => [...current, result.message]);
+      setConversationList((current) =>
+        current.map((conversation) =>
+          (conversation.remoteJid ?? conversation.id) === remoteJid
+            ? { ...conversation, lastMessage: text, lastMessageAt: new Date().toISOString() }
+            : conversation,
+        ),
+      );
+      setMessageDraft("");
+      setWhatsAppSyncStatus("Mensagem enviada.");
+    } catch (error) {
+      setWhatsAppSyncStatus(error instanceof Error ? error.message : "Nao foi possivel enviar a mensagem.");
+    } finally {
+      setWhatsAppBusy("");
+    }
   }
 
   async function saveAgentSettings(event: FormEvent<HTMLFormElement>) {
@@ -931,6 +999,10 @@ function App() {
             setSelectedConversation={setSelectedConversation}
             messageDraft={messageDraft}
             setMessageDraft={setMessageDraft}
+            syncWhatsApp={syncWhatsApp}
+            sendWhatsAppText={sendWhatsAppText}
+            whatsAppSyncStatus={whatsAppSyncStatus}
+            whatsAppBusy={whatsAppBusy}
           />
         )}
         {activeView === "leads" && (
@@ -1130,6 +1202,10 @@ function WhatsAppView({
   setSelectedConversation,
   messageDraft,
   setMessageDraft,
+  syncWhatsApp,
+  sendWhatsAppText,
+  whatsAppSyncStatus,
+  whatsAppBusy,
 }: {
   conversations: Conversation[];
   messages: Message[];
@@ -1137,7 +1213,20 @@ function WhatsAppView({
   setSelectedConversation: (conversation: Conversation) => void;
   messageDraft: string;
   setMessageDraft: (value: string) => void;
+  syncWhatsApp: () => void;
+  sendWhatsAppText: () => void;
+  whatsAppSyncStatus: string;
+  whatsAppBusy: "" | "sync" | "send";
 }) {
+  const selectedRemoteJid = selectedConversation.remoteJid ?? selectedConversation.id;
+  const visibleMessages = messages.filter((message) => {
+    if (message.remoteJid || message.conversationId) {
+      return (message.remoteJid ?? message.conversationId) === selectedRemoteJid;
+    }
+
+    return conversations.length <= 3;
+  });
+
   const actionButtons = [
     { label: "Video", icon: Video },
     { label: "Audio", icon: Mic },
@@ -1152,10 +1241,11 @@ function WhatsAppView({
       <aside className="conversation-list">
         <div className="list-header">
           <h2>Conversas</h2>
-          <button>
-            <Plus size={16} />
+          <button onClick={syncWhatsApp} disabled={whatsAppBusy === "sync"} title="Sincronizar WhatsApp">
+            {whatsAppBusy === "sync" ? <Clock3 size={16} /> : <Plus size={16} />}
           </button>
         </div>
+        {whatsAppSyncStatus && <div className="sync-status">{whatsAppSyncStatus}</div>}
         {conversations.map((conversation) => (
           <button
             key={conversation.id}
@@ -1197,16 +1287,25 @@ function WhatsAppView({
         </div>
 
         <div className="messages">
-          {messages.map((message) => (
-            <div className={`message ${message.from}`} key={message.id}>
-              {message.kind === "audio" && <PlayCircle size={18} />}
-              <span>{message.body}</span>
-              <small>{message.time}</small>
+          {visibleMessages.length ? (
+            visibleMessages.map((message) => (
+              <div className={`message ${message.from}`} key={message.id}>
+                {message.kind === "audio" && <PlayCircle size={18} />}
+                <span>{message.body}</span>
+                <small>{message.time}</small>
+              </div>
+            ))
+          ) : (
+            <div className="empty-chat">
+              <strong>Nenhuma mensagem importada ainda.</strong>
+              <span>Clique em sincronizar para buscar o historico disponivel na Evolution API.</span>
             </div>
-          ))}
+          )}
         </div>
 
-        <footer className="composer">
+        <footer className="composer" onKeyDown={(event) => {
+          if (event.key === "Enter") sendWhatsAppText();
+        }}>
           <button>
             <Paperclip size={19} />
           </button>
@@ -1218,7 +1317,7 @@ function WhatsAppView({
           <button>
             <Mic size={19} />
           </button>
-          <button className="send-button">
+          <button className="send-button" onClick={sendWhatsAppText} disabled={whatsAppBusy === "send"}>
             <Send size={19} />
           </button>
         </footer>

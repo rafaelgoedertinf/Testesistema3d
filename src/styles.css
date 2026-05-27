@@ -646,6 +646,35 @@ textarea:focus {
   height: 2.45rem;
 }
 
+.sync-status {
+  margin: 0.5rem;
+  padding: 0.7rem 0.8rem;
+  color: #ccfbf1;
+  border: 1px solid rgba(45, 212, 191, 0.24);
+  border-radius: 14px;
+  background: rgba(45, 212, 191, 0.1);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.empty-chat {
+  align-self: center;
+  display: grid;
+  gap: 0.35rem;
+  max-width: 420px;
+  padding: 1rem;
+  color: #cbd5e1;
+  border: 1px dashed var(--line);
+  border-radius: 18px;
+  background: rgba(15, 23, 42, 0.5);
+  text-align: center;
+}
+
+.empty-chat span {
+  color: var(--muted);
+  line-height: 1.5;
+}
+
 .conversation {
   width: 100%;
   gap: 0.75rem;
