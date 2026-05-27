@@ -746,6 +746,7 @@ function normalizeMessage(message, remoteJid, index = 0) {
   const timestamp = getTimestampMillis(message?.messageTimestamp || message?.timestamp || message?.createdAt);
   const fromMe = Boolean(key.fromMe ?? message?.fromMe);
   const mediaInfo = getMessageMediaInfo(message);
+  const senderName = message?.pushName || message?.participant?.pushName || message?.sender?.pushName || message?.contact?.pushName || "";
 
   return {
     id: key.id || message?.id || `msg-${messageRemoteJid}-${timestamp}-${index}`,
@@ -754,6 +755,7 @@ function normalizeMessage(message, remoteJid, index = 0) {
     remoteJid: messageRemoteJid,
     from: fromMe ? "agent" : "lead",
     body: getMessageBody(message),
+    senderName,
     time: formatMessageTime(timestamp),
     timestamp,
     kind: getMessageKind(message),
@@ -1020,6 +1022,20 @@ function applyUnreadCounts(conversations, messages) {
   });
 }
 
+function enrichConversationsFromMessages(conversations, messages) {
+  const nameByJid = new Map();
+  for (const message of messages ?? []) {
+    const jid = message.remoteJid || message.conversationId;
+    const name = normalizeDisplayName(message.senderName) ? message.senderName : "";
+    if (jid && name && message.from === "lead") nameByJid.set(jid, name);
+  }
+
+  return (conversations ?? []).map((conversation) => {
+    const name = nameByJid.get(conversation.remoteJid || conversation.id);
+    return name && (!conversation.name || conversation.name.startsWith("+")) ? { ...conversation, name } : conversation;
+  });
+}
+
 async function syncWhatsAppHistory(database, options = {}) {
   const { instance } = getEvolutionConfig(database);
   await ensureEvolutionInstance(database);
@@ -1081,9 +1097,9 @@ async function syncWhatsAppHistory(database, options = {}) {
   const mergedMessages = mergeByKey(remappedExistingMessages, remappedImportedMessages, (item) => item.evolutionMessageId || item.id);
 
   mergedMessages.sort((a, b) => Number(a.timestamp ?? 0) - Number(b.timestamp ?? 0));
-  const mergedConversations = applyUnreadCounts(canonicalConversations, mergedMessages);
+  const mergedConversations = enrichConversationsFromMessages(applyUnreadCounts(canonicalConversations, mergedMessages), mergedMessages);
   mergedConversations.sort(
-    (a, b) => Number(b.unread ?? 0) - Number(a.unread ?? 0) || new Date(b.lastMessageAt ?? 0).getTime() - new Date(a.lastMessageAt ?? 0).getTime(),
+    (a, b) => new Date(b.lastMessageAt ?? 0).getTime() - new Date(a.lastMessageAt ?? 0).getTime(),
   );
 
   database.conversations = mergedConversations;

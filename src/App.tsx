@@ -434,6 +434,7 @@ function App() {
   const [newLead, setNewLead] = useState({ name: "", state: "", phone: "" });
   const [messageDraft, setMessageDraft] = useState("");
   const [selectedMessageId, setSelectedMessageId] = useState<string | number | null>(null);
+  const readAliasesRef = useRef<Set<string | number>>(new Set());
   const [isRecordingAudio, setIsRecordingAudio] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -694,6 +695,13 @@ function App() {
     setNewTag("");
   }
 
+  function applyLocalReadState(conversationsToUpdate: Conversation[]) {
+    return conversationsToUpdate.map((conversation) => {
+      const ids = [conversation.id, conversation.remoteJid, ...(conversation.aliases ?? [])].filter((id): id is string | number => id !== undefined && id !== "");
+      return ids.some((id) => readAliasesRef.current.has(id)) ? { ...conversation, unread: 0 } : conversation;
+    });
+  }
+
   function startNewConversation(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const digits = newConversationPhone.replace(/\D/g, "");
@@ -733,10 +741,14 @@ function App() {
 
   async function markConversationRead(conversation: Conversation) {
     const remoteJid = conversation.remoteJid ?? String(conversation.id);
+    [conversation.id, conversation.remoteJid, ...(conversation.aliases ?? [])].filter((id): id is string | number => id !== undefined && id !== "").forEach((id) =>
+      readAliasesRef.current.add(id),
+    );
     setConversationList((current) =>
-      current.map((item) =>
-        (item.remoteJid ?? item.id) === remoteJid || item.id === conversation.id ? { ...item, unread: 0 } : item,
-      ),
+      current.map((item) => {
+        const ids = [item.id, item.remoteJid, ...(item.aliases ?? [])].filter((id): id is string | number => id !== undefined && id !== "");
+        return ids.some((id) => readAliasesRef.current.has(id)) ? { ...item, unread: 0 } : item;
+      }),
     );
     setSelectedConversation({ ...conversation, unread: 0 });
 
@@ -775,11 +787,20 @@ function App() {
         token: sessionToken,
         body: JSON.stringify({ quick: silent }),
       });
-      setConversationList(result.conversations);
+      setConversationList(applyLocalReadState(result.conversations));
       setChatMessages((current) => mergeClientMessages(result.messages, current));
       setSelectedConversation((current) =>
         result.conversations.find((conversation) => conversation.id === current.id) ?? result.conversations[0] ?? current,
       );
+      if (selectedConversation?.id) {
+        const current = result.conversations.find((conversation) =>
+          [conversation.id, conversation.remoteJid, ...(conversation.aliases ?? [])].some((id) =>
+            [selectedConversation.id, selectedConversation.remoteJid, ...(selectedConversation.aliases ?? [])].includes(id),
+          ),
+        );
+        if (current) markConversationRead(current);
+      }
+
       if (!silent) {
         setWhatsAppSyncStatus(
           `Sincronizacao concluida: ${result.sync.importedConversations} conversas e ${result.sync.importedMessages} mensagens importadas.`,
@@ -1522,10 +1543,7 @@ function WhatsAppView({
         <div className="list-header">
           <h2>Conversas</h2>
           <div className="list-actions">
-            <button className="sync-button" onClick={syncWhatsApp} disabled={whatsAppBusy === "sync"} title="Sincronizar WhatsApp">
-              {whatsAppBusy === "sync" ? <Clock3 size={16} /> : <RefreshIcon />}
-              <span>{whatsAppBusy === "sync" ? "Sincronizando" : "Sincronizar"}</span>
-            </button>
+            <span className="auto-sync-label">Tempo real</span>
             <button className="new-chat-button" onClick={() => setIsNewConversationOpen(true)} title="Nova conversa">
               <Plus size={16} />
             </button>

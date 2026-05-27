@@ -764,6 +764,15 @@ textarea:focus {
   align-items: center;
 }
 
+
+.auto-sync-label {
+  color: var(--brand);
+  font-size: 0.74rem;
+  font-weight: 900;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
 .list-header .new-chat-button {
   width: 2.45rem;
   min-width: 2.45rem;
