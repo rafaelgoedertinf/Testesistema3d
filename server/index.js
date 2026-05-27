@@ -676,6 +676,26 @@ function getMessageKind(message) {
   return "text";
 }
 
+function getMessageMediaInfo(message) {
+  const content = message?.message ?? message;
+  const media = content?.imageMessage || content?.videoMessage || content?.audioMessage || content?.documentMessage || {};
+  const thumbnail = media.jpegThumbnail
+    ? `data:image/jpeg;base64,${Buffer.isBuffer(media.jpegThumbnail) ? media.jpegThumbnail.toString("base64") : media.jpegThumbnail}`
+    : "";
+
+  return {
+    mediaUrl: media.url || media.directPath || "",
+    thumbnail,
+    fileName: media.fileName || media.title || "",
+    mimeType: media.mimetype || media.mimeType || "",
+  };
+}
+
+function stripDataUrl(value) {
+  const text = String(value ?? "");
+  return text.includes(",") && text.startsWith("data:") ? text.split(",").slice(1).join(",") : text;
+}
+
 function normalizeConversation(chat, index = 0, contactMap = new Map()) {
   const remoteJid = normalizeRemoteJid(
     chat?.remoteJid || chat?.id || chat?.jid || chat?.key?.remoteJid || chat?.contact?.remoteJid || chat?.number,
@@ -707,6 +727,7 @@ function normalizeMessage(message, remoteJid, index = 0) {
   const messageRemoteJid = normalizeRemoteJid(remoteJid || key.remoteJid || message?.remoteJid);
   const timestamp = getTimestampMillis(message?.messageTimestamp || message?.timestamp || message?.createdAt);
   const fromMe = Boolean(key.fromMe ?? message?.fromMe);
+  const mediaInfo = getMessageMediaInfo(message);
 
   return {
     id: key.id || message?.id || `msg-${messageRemoteJid}-${timestamp}-${index}`,
@@ -718,6 +739,10 @@ function normalizeMessage(message, remoteJid, index = 0) {
     time: formatMessageTime(timestamp),
     timestamp,
     kind: getMessageKind(message),
+    mediaUrl: mediaInfo.mediaUrl,
+    thumbnail: mediaInfo.thumbnail,
+    fileName: mediaInfo.fileName,
+    mimeType: mediaInfo.mimeType,
     source: "evolution",
     rawType: Object.keys(message?.message ?? message ?? {})[0] ?? "unknown",
   };
@@ -777,7 +802,7 @@ async function sendEvolutionMedia(database, instance, remoteJid, phone, media) {
           mediatype,
           mimetype: media.mimeType,
           caption: media.caption || "",
-          media: media.data,
+          media: stripDataUrl(media.data),
           fileName: media.fileName || "arquivo",
         }),
       });
@@ -790,7 +815,7 @@ async function sendEvolutionMedia(database, instance, remoteJid, phone, media) {
   throw new Error(`Nao foi possivel enviar midia pela Evolution. Tentativas: ${errors.join(" | ")}`);
 }
 
-async function syncWhatsAppHistory(database) {
+async function syncWhatsAppHistory(database, options = {}) {
   const { instance } = getEvolutionConfig(database);
   await ensureEvolutionInstance(database);
 
@@ -816,7 +841,9 @@ async function syncWhatsAppHistory(database) {
     .filter((conversation) => conversation.remoteJid && !conversation.remoteJid.includes("status@broadcast"));
 
   const importedMessages = [];
-  for (const conversation of conversations.slice(0, 50)) {
+  const conversationLimit = options.quick ? 20 : 50;
+  const messageLimit = options.quick ? 30 : 100;
+  for (const conversation of conversations.slice(0, conversationLimit)) {
     const messagesResult = await callEvolutionApiOptional(
       database,
       `/chat/findMessages/${encodeURIComponent(instance)}`,
@@ -824,7 +851,7 @@ async function syncWhatsAppHistory(database) {
         method: "POST",
         body: JSON.stringify({
           where: { key: { remoteJid: conversation.remoteJid } },
-          limit: 100,
+          limit: messageLimit,
         }),
       },
       ["messages.records", "messages", "data", "records"],
@@ -1218,8 +1245,9 @@ async function routeRequest(request, response) {
     }
 
     if (request.method === "POST" && url.pathname === "/api/whatsapp/sync") {
+      const body = await readJsonBody(request);
       const database = await ensureDatabase();
-      const sync = await syncWhatsAppHistory(database);
+      const sync = await syncWhatsAppHistory(database, { quick: Boolean(body.quick) });
       await writeDatabase(database);
 
       jsonResponse(response, 200, {
@@ -1307,6 +1335,9 @@ async function routeRequest(request, response) {
         time: formatMessageTime(timestamp),
         timestamp,
         kind: body.mediaType === "audio" ? "audio" : body.mediaType === "video" ? "video" : "file",
+        mediaUrl: body.data,
+        fileName: body.fileName || "arquivo",
+        mimeType: body.mimeType || "application/octet-stream",
         source: "evolution",
       };
 

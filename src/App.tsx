@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   BarChart3,
@@ -76,6 +76,11 @@ type Message = {
   body: string;
   time: string;
   kind?: "text" | "audio" | "video" | "file";
+  mediaUrl?: string;
+  thumbnail?: string;
+  fileName?: string;
+  mimeType?: string;
+  status?: "pending" | "sent" | "failed";
 };
 
 type AgentSettings = {
@@ -379,6 +384,23 @@ function formatCurrency(value: number) {
   }).format(value);
 }
 
+function mergeClientMessages(serverMessages: Message[], currentMessages: Message[]) {
+  const map = new Map<string | number, Message>();
+
+  for (const message of serverMessages) {
+    map.set(message.evolutionMessageId || message.id, message);
+  }
+
+  for (const message of currentMessages) {
+    const key = message.evolutionMessageId || message.id;
+    if (!map.has(key) || message.status === "pending" || message.status === "failed") {
+      map.set(key, message);
+    }
+  }
+
+  return Array.from(map.values()).sort((a, b) => Number(a.timestamp ?? 0) - Number(b.timestamp ?? 0));
+}
+
 function getTemperature(score: number): LeadTemperature {
   if (score >= 75) return "Quente";
   if (score >= 45) return "Morno";
@@ -408,6 +430,9 @@ function App() {
   const [newLead, setNewLead] = useState({ name: "", state: "", phone: "" });
   const [messageDraft, setMessageDraft] = useState("");
   const [selectedMessageId, setSelectedMessageId] = useState<string | number | null>(null);
+  const [isRecordingAudio, setIsRecordingAudio] = useState(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
   const [whatsAppSyncStatus, setWhatsAppSyncStatus] = useState("");
   const [whatsAppBusy, setWhatsAppBusy] = useState<"" | "sync" | "send">("");
   const [hasAutoSyncedWhatsApp, setHasAutoSyncedWhatsApp] = useState(false);
@@ -681,9 +706,13 @@ function App() {
         sync: { importedConversations: number; importedMessages: number; lastSyncAt: string };
         conversations: Conversation[];
         messages: Message[];
-      }>("/api/whatsapp/sync", { method: "POST", token: sessionToken });
+      }>("/api/whatsapp/sync", {
+        method: "POST",
+        token: sessionToken,
+        body: JSON.stringify({ quick: silent }),
+      });
       setConversationList(result.conversations);
-      setChatMessages(result.messages);
+      setChatMessages((current) => mergeClientMessages(result.messages, current));
       setSelectedConversation((current) =>
         result.conversations.find((conversation) => conversation.id === current.id) ?? result.conversations[0] ?? current,
       );
@@ -702,26 +731,42 @@ function App() {
   async function sendWhatsAppText() {
     const text = messageDraft.trim();
     const remoteJid = selectedConversation.remoteJid ?? String(selectedConversation.id);
-    if (!text || !remoteJid || !sessionToken) return;
+    if (!text || !remoteJid || !sessionToken || whatsAppBusy === "send") return;
 
+    const localId = `pending-${Date.now()}`;
+    const optimisticMessage: Message = {
+      id: localId,
+      conversationId: remoteJid,
+      remoteJid,
+      from: "agent",
+      body: text,
+      time: new Intl.DateTimeFormat("pt-BR", { hour: "2-digit", minute: "2-digit" }).format(new Date()),
+      timestamp: Date.now(),
+      kind: "text",
+      status: "pending",
+    };
+
+    setChatMessages((current) => [...current, optimisticMessage]);
+    setConversationList((current) =>
+      current.map((conversation) =>
+        (conversation.remoteJid ?? conversation.id) === remoteJid
+          ? { ...conversation, lastMessage: text, lastMessageAt: new Date().toISOString() }
+          : conversation,
+      ),
+    );
+    setMessageDraft("");
     setWhatsAppBusy("send");
+
     try {
       const result = await apiRequest<{ ok: boolean; message: Message }>("/api/whatsapp/send-text", {
         method: "POST",
         token: sessionToken,
-        body: JSON.stringify({ remoteJid, text }),
+        body: JSON.stringify({ remoteJid, conversationId: selectedConversation.id, text }),
       });
-      setChatMessages((current) => [...current, result.message]);
-      setConversationList((current) =>
-        current.map((conversation) =>
-          (conversation.remoteJid ?? conversation.id) === remoteJid
-            ? { ...conversation, lastMessage: text, lastMessageAt: new Date().toISOString() }
-            : conversation,
-        ),
-      );
-      setMessageDraft("");
+      setChatMessages((current) => current.map((message) => (message.id === localId ? { ...result.message, status: "sent" } : message)));
       setWhatsAppSyncStatus("Mensagem enviada.");
     } catch (error) {
+      setChatMessages((current) => current.map((message) => (message.id === localId ? { ...message, status: "failed" } : message)));
       setWhatsAppSyncStatus(error instanceof Error ? error.message : "Nao foi possivel enviar a mensagem.");
     } finally {
       setWhatsAppBusy("");
@@ -730,35 +775,84 @@ function App() {
 
   async function sendWhatsAppMedia(file: File, mediaType: "audio" | "video" | "image" | "document") {
     const remoteJid = selectedConversation.remoteJid ?? String(selectedConversation.id);
-    if (!file || !remoteJid || !sessionToken) return;
+    if (!file || !remoteJid || !sessionToken || whatsAppBusy === "send") return;
 
+    const data = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result ?? ""));
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+    const localId = `pending-media-${Date.now()}`;
+    const optimisticMessage: Message = {
+      id: localId,
+      conversationId: remoteJid,
+      remoteJid,
+      from: "agent",
+      body: messageDraft.trim() || file.name || "Arquivo enviado",
+      time: new Intl.DateTimeFormat("pt-BR", { hour: "2-digit", minute: "2-digit" }).format(new Date()),
+      timestamp: Date.now(),
+      kind: mediaType === "audio" ? "audio" : mediaType === "video" ? "video" : "file",
+      mediaUrl: data,
+      fileName: file.name,
+      mimeType: file.type || "application/octet-stream",
+      status: "pending",
+    };
+
+    setChatMessages((current) => [...current, optimisticMessage]);
+    setMessageDraft("");
     setWhatsAppBusy("send");
+
     try {
-      const data = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result ?? ""));
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-      });
       const result = await apiRequest<{ ok: boolean; message: Message }>("/api/whatsapp/send-media", {
         method: "POST",
         token: sessionToken,
         body: JSON.stringify({
           remoteJid,
+          conversationId: selectedConversation.id,
           data,
           mimeType: file.type || "application/octet-stream",
           fileName: file.name,
           mediaType,
-          caption: messageDraft.trim(),
+          caption: optimisticMessage.body,
         }),
       });
-      setChatMessages((current) => [...current, result.message]);
-      setMessageDraft("");
+      setChatMessages((current) => current.map((message) => (message.id === localId ? { ...result.message, status: "sent" } : message)));
       setWhatsAppSyncStatus("Arquivo enviado.");
     } catch (error) {
+      setChatMessages((current) => current.map((message) => (message.id === localId ? { ...message, status: "failed" } : message)));
       setWhatsAppSyncStatus(error instanceof Error ? error.message : "Nao foi possivel enviar o arquivo.");
     } finally {
       setWhatsAppBusy("");
+    }
+  }
+
+  async function toggleAudioRecording() {
+    if (isRecordingAudio) {
+      mediaRecorderRef.current?.stop();
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      audioChunksRef.current = [];
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) audioChunksRef.current.push(event.data);
+      };
+      recorder.onstop = () => {
+        const blob = new Blob(audioChunksRef.current, { type: recorder.mimeType || "audio/webm" });
+        const file = new File([blob], `audio-${Date.now()}.webm`, { type: blob.type });
+        stream.getTracks().forEach((track) => track.stop());
+        setIsRecordingAudio(false);
+        sendWhatsAppMedia(file, "audio");
+      };
+      mediaRecorderRef.current = recorder;
+      recorder.start();
+      setIsRecordingAudio(true);
+      setWhatsAppSyncStatus("Gravando audio... clique no microfone novamente para enviar.");
+    } catch {
+      setWhatsAppSyncStatus("Nao foi possivel acessar o microfone do navegador.");
     }
   }
 
@@ -772,7 +866,7 @@ function App() {
 
     const intervalId = window.setInterval(() => {
       if (document.visibilityState === "visible") syncWhatsApp(true);
-    }, 8000);
+    }, 3000);
 
     return () => window.clearInterval(intervalId);
   }, [activeView, sessionToken, hasAutoSyncedWhatsApp]);
@@ -1059,6 +1153,8 @@ function App() {
             sendWhatsAppMedia={sendWhatsAppMedia}
             selectedMessageId={selectedMessageId}
             setSelectedMessageId={setSelectedMessageId}
+            isRecordingAudio={isRecordingAudio}
+            toggleAudioRecording={toggleAudioRecording}
             whatsAppSyncStatus={whatsAppSyncStatus}
             whatsAppBusy={whatsAppBusy}
           />
@@ -1270,6 +1366,8 @@ function WhatsAppView({
   sendWhatsAppMedia,
   selectedMessageId,
   setSelectedMessageId,
+  isRecordingAudio,
+  toggleAudioRecording,
   whatsAppSyncStatus,
   whatsAppBusy,
 }: {
@@ -1284,10 +1382,14 @@ function WhatsAppView({
   sendWhatsAppMedia: (file: File, mediaType: "audio" | "video" | "image" | "document") => void;
   selectedMessageId: string | number | null;
   setSelectedMessageId: (id: string | number | null) => void;
+  isRecordingAudio: boolean;
+  toggleAudioRecording: () => void;
   whatsAppSyncStatus: string;
   whatsAppBusy: "" | "sync" | "send";
 }) {
   const selectedRemoteJid = selectedConversation.remoteJid ?? selectedConversation.id;
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const [isAttachMenuOpen, setIsAttachMenuOpen] = useState(false);
   const visibleMessages = messages.filter((message) => {
     if (message.remoteJid || message.conversationId) {
       return (message.remoteJid ?? message.conversationId) === selectedRemoteJid;
@@ -1326,14 +1428,10 @@ function WhatsAppView({
     setMessageDraft(messageDraft || selectedMessage.body);
   }
 
-  const actionButtons = [
-    { label: "Video", icon: Video, onClick: () => triggerFile("video") },
-    { label: "Audio", icon: Mic, onClick: () => triggerFile("audio") },
-    { label: "Anexo", icon: Paperclip, onClick: () => triggerFile("image") },
-    { label: "Encaminhar", icon: Forward, onClick: forwardSelectedMessage },
-    { label: "Copiar", icon: ClipboardCopy, onClick: copySelectedMessage },
-    { label: "Arquivo", icon: FileText, onClick: () => triggerFile("document") },
-  ];
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [selectedRemoteJid, visibleMessages.length, visibleMessages[visibleMessages.length - 1]?.id]);
+
 
   return (
     <section className="whatsapp-layout">
@@ -1374,18 +1472,6 @@ function WhatsAppView({
           <div className="chat-score">{selectedConversation.score}%</div>
         </header>
 
-        <div className="chat-actions">
-          {actionButtons.map((action) => {
-            const Icon = action.icon;
-            return (
-              <button key={action.label} onClick={action.onClick}>
-                <Icon size={16} />
-                {action.label}
-              </button>
-            );
-          })}
-        </div>
-
         <div className="messages">
           {visibleMessages.length ? (
             visibleMessages.map((message) => (
@@ -1394,9 +1480,8 @@ function WhatsAppView({
                 key={message.id}
                 onClick={() => setSelectedMessageId(message.id)}
               >
-                {message.kind === "audio" && <PlayCircle size={18} />}
-                <span>{message.body}</span>
-                <small>{message.time}</small>
+                <MessageContent message={message} />
+                <small>{message.time}{message.status === "pending" ? " • enviando" : message.status === "failed" ? " • falhou" : ""}</small>
               </div>
             ))
           ) : (
@@ -1405,20 +1490,34 @@ function WhatsAppView({
               <span>Clique em sincronizar para buscar o historico disponivel na Evolution API.</span>
             </div>
           )}
+          <div ref={messagesEndRef} />
         </div>
 
-        <footer className="composer" onKeyDown={(event) => {
-          if (event.key === "Enter") sendWhatsAppText();
-        }}>
-          <button onClick={() => triggerFile("document")}>
-            <Paperclip size={19} />
-          </button>
+        <footer className="composer">
+          <div className="clip-menu-wrap">
+            <button onClick={() => setIsAttachMenuOpen((current) => !current)} title="Anexar">
+              <Paperclip size={19} />
+            </button>
+            {isAttachMenuOpen && (
+              <div className="clip-menu">
+                <button onClick={() => { triggerFile("image"); setIsAttachMenuOpen(false); }}>Foto</button>
+                <button onClick={() => { triggerFile("video"); setIsAttachMenuOpen(false); }}>Video</button>
+                <button onClick={() => { triggerFile("document"); setIsAttachMenuOpen(false); }}>Arquivo</button>
+              </div>
+            )}
+          </div>
           <input
             value={messageDraft}
             onChange={(event) => setMessageDraft(event.target.value)}
-            placeholder="Digite uma mensagem ou instrucao para a IA"
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                sendWhatsAppText();
+              }
+            }}
+            placeholder="Digite uma mensagem"
           />
-          <button onClick={() => triggerFile("audio")}>
+          <button className={isRecordingAudio ? "recording-button" : ""} onClick={toggleAudioRecording} title={isRecordingAudio ? "Parar e enviar audio" : "Gravar audio"}>
             <Mic size={19} />
           </button>
           <button className="send-button" onClick={sendWhatsAppText} disabled={whatsAppBusy === "send"}>
@@ -1446,6 +1545,41 @@ function WhatsAppView({
       </aside>
     </section>
   );
+}
+
+
+function MessageContent({ message }: { message: Message }) {
+  const isImage = message.mimeType?.startsWith("image/") || message.mediaUrl?.startsWith("data:image");
+  const isVideo = message.kind === "video" || message.mimeType?.startsWith("video/");
+  const isAudio = message.kind === "audio" || message.mimeType?.startsWith("audio/");
+
+  if (message.mediaUrl) {
+    return (
+      <span className="message-content">
+        {isImage && <img className="message-media" src={message.mediaUrl} alt={message.fileName || "Imagem"} />}
+        {isVideo && <video className="message-media" src={message.mediaUrl} controls />}
+        {isAudio && <audio className="message-audio" src={message.mediaUrl} controls />}
+        {!isImage && !isVideo && !isAudio && (
+          <a className="message-file" href={message.mediaUrl} target="_blank" rel="noreferrer">
+            <FileText size={18} />
+            {message.fileName || "Abrir arquivo"}
+          </a>
+        )}
+        {message.body && <span>{message.body}</span>}
+      </span>
+    );
+  }
+
+  if (message.thumbnail) {
+    return (
+      <span className="message-content">
+        <img className="message-media" src={message.thumbnail} alt={message.fileName || "Miniatura"} />
+        <span>{message.body}</span>
+      </span>
+    );
+  }
+
+  return <span>{message.body}</span>;
 }
 
 function LeadsView({
