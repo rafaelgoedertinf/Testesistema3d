@@ -334,14 +334,18 @@ function getTemperature(score) {
   return "Frio";
 }
 
+function getManagedInstanceName(evolution = {}) {
+  return String(evolution.instance ?? "").trim() || "atendedor-20";
+}
+
 function getEvolutionConfig(database) {
   const evolution = database.evolution ?? defaultDatabase.evolution;
   const baseUrl = String(evolution.baseUrl ?? "").trim().replace(/\/$/, "");
-  const instance = String(evolution.instance ?? "").trim();
+  const instance = getManagedInstanceName(evolution);
   const apiKey = String(evolution.apiKey ?? "").trim();
 
-  if (!baseUrl || !instance || !apiKey) {
-    throw new Error("Configure URL, instancia e API key da Evolution API antes de testar.");
+  if (!baseUrl || !apiKey) {
+    throw new Error("Configure URL e API key da Evolution API antes de testar.");
   }
 
   return { baseUrl, instance, apiKey };
@@ -382,6 +386,36 @@ async function callEvolutionApi(database, path, options = {}) {
   }
 
   return payload;
+}
+
+async function ensureEvolutionInstance(database) {
+  const { instance } = getEvolutionConfig(database);
+
+  try {
+    const payload = await callEvolutionApi(database, `/instance/connectionState/${encodeURIComponent(instance)}`);
+    const state = payload?.instance?.state ?? payload?.state ?? payload?.connectionStatus ?? payload?.status ?? "desconhecido";
+    return { instance, state, created: false };
+  } catch (error) {
+    if (error?.status !== 404) throw error;
+  }
+
+  await callEvolutionApi(database, "/instance/create", {
+    method: "POST",
+    body: JSON.stringify({
+      instanceName: instance,
+      qrcode: false,
+      integration: "WHATSAPP-BAILEYS",
+    }),
+  });
+
+  database.evolution = {
+    ...(database.evolution ?? defaultDatabase.evolution),
+    instance,
+    instanceManagedByApp: true,
+    instanceCreatedAt: new Date().toISOString(),
+  };
+
+  return { instance, state: "created", created: true };
 }
 
 function extractQrCode(payload) {
@@ -622,7 +656,7 @@ async function routeRequest(request, response) {
       const database = await ensureDatabase();
       const currentEvolution = database.evolution ?? defaultDatabase.evolution;
       const baseUrl = String(body.baseUrl ?? currentEvolution.baseUrl).trim().replace(/\/$/, "");
-      const instance = String(body.instance ?? currentEvolution.instance).trim();
+      const instance = getManagedInstanceName(currentEvolution);
       const apiKey = String(body.apiKey ?? "").trim();
 
       database.evolution = {
@@ -630,7 +664,8 @@ async function routeRequest(request, response) {
         baseUrl,
         instance,
         apiKey: apiKey || currentEvolution.apiKey || "",
-        connected: Boolean(baseUrl && instance && (apiKey || currentEvolution.apiKey)),
+        connected: Boolean(baseUrl && (apiKey || currentEvolution.apiKey)),
+        instanceManagedByApp: true,
         webhookPath: currentEvolution.webhookPath ?? "/api/evolution/webhook",
         lastSavedAt: new Date().toISOString(),
       };
@@ -641,13 +676,14 @@ async function routeRequest(request, response) {
 
     if (request.method === "POST" && url.pathname === "/api/evolution/test") {
       const database = await ensureDatabase();
-      const { instance } = getEvolutionConfig(database);
-      const payload = await callEvolutionApi(database, `/instance/connectionState/${encodeURIComponent(instance)}`);
-      const state = payload?.instance?.state ?? payload?.state ?? payload?.connectionStatus ?? payload?.status ?? "desconhecido";
+      const instanceStatus = await ensureEvolutionInstance(database);
+      const { instance, state } = instanceStatus;
 
       database.evolution = {
         ...(database.evolution ?? defaultDatabase.evolution),
         lastTestAt: new Date().toISOString(),
+        instance,
+        instanceManagedByApp: true,
         lastConnectionState: state,
       };
       await writeDatabase(database);
@@ -657,23 +693,27 @@ async function routeRequest(request, response) {
         instance,
         state,
         connected: ["open", "connected", "online"].includes(String(state).toLowerCase()),
+        created: instanceStatus.created,
       });
       return;
     }
 
     if (request.method === "POST" && url.pathname === "/api/evolution/qrcode") {
       const database = await ensureDatabase();
-      const { instance } = getEvolutionConfig(database);
+      const instanceStatus = await ensureEvolutionInstance(database);
+      const { instance } = instanceStatus;
       const payload = await callEvolutionApi(database, `/instance/connect/${encodeURIComponent(instance)}`);
       const qrCode = extractQrCode(payload);
 
       database.evolution = {
         ...(database.evolution ?? defaultDatabase.evolution),
+        instance,
+        instanceManagedByApp: true,
         lastQrCodeAt: new Date().toISOString(),
       };
       await writeDatabase(database);
 
-      jsonResponse(response, 200, { ok: true, instance, qrCode });
+      jsonResponse(response, 200, { ok: true, instance, created: instanceStatus.created, qrCode });
       return;
     }
 

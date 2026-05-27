@@ -98,11 +98,13 @@ type EvolutionTestResult = {
   instance: string;
   state: string;
   connected: boolean;
+  created?: boolean;
 };
 
 type EvolutionQrCodeResult = {
   ok: boolean;
   instance: string;
+  created?: boolean;
   qrCode: {
     image: string;
     code: string;
@@ -647,7 +649,6 @@ function App() {
         token: sessionToken,
         body: JSON.stringify({
           baseUrl: evolutionSettings.baseUrl,
-          instance: evolutionSettings.instance,
           apiKey: evolutionSettings.apiKey,
         }),
       });
@@ -679,7 +680,9 @@ function App() {
       setEvolutionActionStatus(
         result.connected
           ? `Conexao OK. Instancia ${result.instance} esta conectada (${result.state}).`
-          : `API respondeu. Estado atual da instancia ${result.instance}: ${result.state}.`,
+          : result.created
+            ? `Instancia ${result.instance} criada automaticamente. Agora clique em Gerar QR Code.`
+            : `API respondeu. Estado atual da instancia ${result.instance}: ${result.state}.`,
       );
     } catch (error) {
       setEvolutionActionStatus(error instanceof Error ? error.message : "Nao foi possivel testar a Evolution API.");
@@ -707,8 +710,8 @@ function App() {
       setEvolutionQrCode(result.qrCode);
       setEvolutionActionStatus(
         result.qrCode.image || result.qrCode.code
-          ? "QR Code gerado. Escaneie com o WhatsApp no celular."
-          : "A Evolution respondeu, mas nao retornou um QR Code reconhecido.",
+          ? `QR Code gerado para a instancia ${result.instance}. Escaneie com o WhatsApp no celular.`
+          : `Instancia ${result.instance} pronta, mas a Evolution nao retornou um QR Code reconhecido.`,
       );
     } catch (error) {
       setEvolutionActionStatus(error instanceof Error ? error.message : "Nao foi possivel gerar o QR Code.");
@@ -1417,12 +1420,8 @@ function SettingsView({
             />
           </label>
           <label className="stacked-label">
-            Nome da instancia
-            <input
-              value={evolutionSettings.instance}
-              onChange={(event) => setEvolutionSettings({ ...evolutionSettings, instance: event.target.value })}
-              placeholder="atendedor-20"
-            />
+            Instancia WhatsApp
+            <input readOnly value={`${evolutionSettings.instance || "atendedor-20"} (criada automaticamente pelo Atendedor)`} />
           </label>
           <label className="stacked-label">
             API Key
@@ -1442,7 +1441,7 @@ function SettingsView({
             <input readOnly value={apiIntegrationUrl} />
           </label>
           <p className="settings-help">
-            O Atendedor usa essa API interna para chamar a Evolution pelo backend, mantendo sua API key fora do navegador.
+            Informe somente URL e API key. O Atendedor cria e gerencia a instancia automaticamente pela API da Evolution.
           </p>
           <button className="primary-action full" type="submit">
             Salvar conexao

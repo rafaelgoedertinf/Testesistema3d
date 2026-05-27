@@ -20,7 +20,7 @@ A API tambem fica na mesma URL:
 https://atendedor.seudominio.com.br/api
 ```
 
-O Atendedor chama a Evolution API pelo backend usando a URL, instancia e API key salvas na tela de Configuracoes.
+O Atendedor chama a Evolution API pelo backend usando a URL e API key salvas na tela de Configuracoes.
 
 ## Custos esperados
 
@@ -102,8 +102,8 @@ Depois que o app abrir online:
 
 1. Entre no Atendedor 2.0.
 2. Clique em **Configuracoes**.
-3. Preencha URL, instancia e API key da Evolution API.
-4. Clique em **Testar conexao** para validar URL, instancia e API key.
+3. Preencha URL e API key da Evolution API.
+4. Clique em **Testar conexao** para validar URL e API key.
 5. Clique em **Gerar QR Code** e escaneie com o WhatsApp para conectar.
 
 ## Observacao importante para comercializar
@@ -112,7 +112,7 @@ Hoje a persistencia online usa uma tabela JSON (`app_state`) para acelerar os te
 
 - empresas;
 - usuarios;
-- instancias WhatsApp;
+- instancias WhatsApp criadas automaticamente;
 - leads;
 - etapas;
 - etiquetas;
