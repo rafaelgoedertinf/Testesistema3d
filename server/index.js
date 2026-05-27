@@ -22,6 +22,7 @@ const pgPool = databaseUrl
   : null;
 let storageMode = pgPool ? "postgres" : "local-json";
 let lastPostgresError = "";
+let lastPostgresMessage = "";
 
 
 function getDatabaseUrlInfo(url) {
@@ -54,10 +55,11 @@ async function probePostgres() {
     await pgPool.query("SELECT 1");
     storageMode = "postgres";
     lastPostgresError = "";
-    return { postgresConfigured: true, postgresHealthy: true, error: "" };
+    lastPostgresMessage = "";
+    return { postgresConfigured: true, postgresHealthy: true, error: "", message: "" };
   } catch (error) {
     rememberPostgresError(error);
-    return { postgresConfigured: true, postgresHealthy: false, error: lastPostgresError };
+    return { postgresConfigured: true, postgresHealthy: false, error: lastPostgresError, message: lastPostgresMessage };
   }
 }
 
@@ -281,8 +283,9 @@ async function writeLocalDatabase(database) {
 
 function rememberPostgresError(error) {
   lastPostgresError = error?.code ? String(error.code) : String(error?.message ?? error);
+  lastPostgresMessage = String(error?.message ?? error ?? "").slice(0, 300);
   storageMode = "local-json-fallback";
-  console.error("Postgres indisponivel; usando fallback local:", lastPostgresError);
+  console.error("Postgres indisponivel; usando fallback local:", lastPostgresError, lastPostgresMessage);
 }
 
 async function ensureDatabase() {
@@ -291,6 +294,7 @@ async function ensureDatabase() {
       const database = await ensurePostgresState();
       storageMode = "postgres";
       lastPostgresError = "";
+      lastPostgresMessage = "";
       return database;
     } catch (error) {
       rememberPostgresError(error);
@@ -552,6 +556,7 @@ async function routeRequest(request, response) {
         postgresConfigured: probe.postgresConfigured,
         postgresHealthy: probe.postgresHealthy,
         lastPostgresError: probe.error,
+        lastPostgresMessage: probe.message,
         databaseUrl: databaseUrlInfo,
       });
       return;
