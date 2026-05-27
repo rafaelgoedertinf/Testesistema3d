@@ -188,6 +188,25 @@ textarea:focus {
   border: 1px solid var(--line);
 }
 
+.password-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.5rem;
+}
+
+.password-field input {
+  min-width: 0;
+}
+
+.password-field button {
+  padding: 0 0.9rem;
+  color: #ccfbf1;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(45, 212, 191, 0.1);
+  font-weight: 800;
+}
+
 .error-message {
   color: #fecdd3;
   background: rgba(244, 63, 94, 0.14);

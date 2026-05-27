@@ -362,6 +362,7 @@ function App() {
   const [activeView, setActiveView] = useState<View>("dashboard");
   const [email, setEmail] = useState(SEEDED_USER_EMAIL);
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [loginError, setLoginError] = useState("");
   const [apiStatus, setApiStatus] = useState<ApiStatus>(sessionToken ? "online" : "local");
   const [conversationList, setConversationList] = useState(conversations);
@@ -426,10 +427,17 @@ function App() {
     event.preventDefault();
     setLoginError("");
 
+    const formData = new FormData(event.currentTarget);
+    const submittedEmail = String(formData.get("email") ?? email).trim().toLowerCase();
+    const submittedPassword = String(formData.get("password") ?? password);
+    setEmail(submittedEmail);
+    setPassword(submittedPassword);
+    let apiError = "";
+
     try {
       const result = await apiRequest<{ token: string }>("/api/auth/login", {
         method: "POST",
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email: submittedEmail, password: submittedPassword }),
       });
       localStorage.setItem("atendedor-2-token", result.token);
       localStorage.setItem("atendedor-2-session", "true");
@@ -437,12 +445,13 @@ function App() {
       setApiStatus("online");
       setIsAuthenticated(true);
       return;
-    } catch {
+    } catch (error) {
+      apiError = error instanceof Error ? error.message : "Erro ao chamar a API online.";
       setApiStatus("offline");
     }
 
-    const normalizedEmail = email.trim().toLowerCase();
-    const passwordHash = await sha256(password);
+    const normalizedEmail = submittedEmail;
+    const passwordHash = await sha256(submittedPassword);
 
     if (normalizedEmail === SEEDED_USER_EMAIL && passwordHash === SEEDED_PASSWORD_HASH) {
       localStorage.setItem("atendedor-2-session", "true");
@@ -451,7 +460,11 @@ function App() {
       return;
     }
 
-    setLoginError("E-mail ou senha invalidos. Se estiver rodando local, confirme se a API esta aberta.");
+    setLoginError(
+      apiError
+        ? `Nao foi possivel entrar. Resposta da API: ${apiError}`
+        : "E-mail ou senha invalidos. Confira maiusculas, minusculas e caracteres especiais.",
+    );
   }
 
   function handleLogout() {
@@ -645,16 +658,29 @@ function App() {
           <form onSubmit={handleLogin} className="login-form">
             <label>
               E-mail
-              <input value={email} onChange={(event) => setEmail(event.target.value)} type="email" />
+              <input
+                name="email"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                type="email"
+                autoComplete="username"
+              />
             </label>
             <label>
               Senha
-              <input
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                type="password"
-                placeholder="Digite a senha inicial"
-              />
+              <div className="password-field">
+                <input
+                  name="password"
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  type={showPassword ? "text" : "password"}
+                  placeholder="Digite a senha inicial"
+                  autoComplete="current-password"
+                />
+                <button type="button" onClick={() => setShowPassword((current) => !current)}>
+                  {showPassword ? "Ocultar" : "Mostrar"}
+                </button>
+              </div>
             </label>
             {loginError && <strong className="error-message">{loginError}</strong>}
             <button type="submit">
