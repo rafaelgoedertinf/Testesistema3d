@@ -409,6 +409,7 @@ function App() {
   const [messageDraft, setMessageDraft] = useState("");
   const [whatsAppSyncStatus, setWhatsAppSyncStatus] = useState("");
   const [whatsAppBusy, setWhatsAppBusy] = useState<"" | "sync" | "send">("");
+  const [hasAutoSyncedWhatsApp, setHasAutoSyncedWhatsApp] = useState(false);
   const [agentSettings, setAgentSettings] = useState<AgentSettings>(initialAgentSettings);
   const [evolutionSettings, setEvolutionSettings] = useState<EvolutionSettings>(initialEvolutionSettings);
   const [settingsStatus, setSettingsStatus] = useState("");
@@ -721,6 +722,13 @@ function App() {
       setWhatsAppBusy("");
     }
   }
+
+  useEffect(() => {
+    if (activeView !== "whatsapp" || !sessionToken || hasAutoSyncedWhatsApp) return;
+
+    setHasAutoSyncedWhatsApp(true);
+    syncWhatsApp();
+  }, [activeView, sessionToken, hasAutoSyncedWhatsApp]);
 
   async function saveAgentSettings(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1195,6 +1203,11 @@ function useDashboardMetrics() {
   };
 }
 
+
+function RefreshIcon() {
+  return <Clock3 size={16} />;
+}
+
 function WhatsAppView({
   conversations,
   messages,
@@ -1241,8 +1254,9 @@ function WhatsAppView({
       <aside className="conversation-list">
         <div className="list-header">
           <h2>Conversas</h2>
-          <button onClick={syncWhatsApp} disabled={whatsAppBusy === "sync"} title="Sincronizar WhatsApp">
-            {whatsAppBusy === "sync" ? <Clock3 size={16} /> : <Plus size={16} />}
+          <button className="sync-button" onClick={syncWhatsApp} disabled={whatsAppBusy === "sync"} title="Sincronizar WhatsApp">
+            {whatsAppBusy === "sync" ? <Clock3 size={16} /> : <RefreshIcon />}
+            <span>{whatsAppBusy === "sync" ? "Sincronizando" : "Sincronizar"}</span>
           </button>
         </div>
         {whatsAppSyncStatus && <div className="sync-status">{whatsAppSyncStatus}</div>}

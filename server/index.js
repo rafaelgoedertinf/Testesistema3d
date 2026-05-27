@@ -721,8 +721,15 @@ async function syncWhatsAppHistory(database) {
     );
   }
 
-  const mergedConversations = mergeByKey(database.conversations ?? [], conversations, (item) => item.remoteJid || item.id);
-  const mergedMessages = mergeByKey(database.messages ?? [], importedMessages, (item) => item.evolutionMessageId || item.id);
+  const existingEvolutionConversations = (database.conversations ?? []).filter(
+    (conversation) => conversation.source === "evolution" || conversation.remoteJid,
+  );
+  const existingEvolutionMessages = (database.messages ?? []).filter(
+    (message) => message.source === "evolution" || message.remoteJid || message.conversationId,
+  );
+
+  const mergedConversations = mergeByKey(existingEvolutionConversations, conversations, (item) => item.remoteJid || item.id);
+  const mergedMessages = mergeByKey(existingEvolutionMessages, importedMessages, (item) => item.evolutionMessageId || item.id);
 
   mergedMessages.sort((a, b) => Number(a.timestamp ?? 0) - Number(b.timestamp ?? 0));
   mergedConversations.sort(
