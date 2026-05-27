@@ -461,6 +461,48 @@ async function ensureEvolutionInstance(database) {
   return { instance, state: "created", created: true };
 }
 
+async function tryEvolutionApi(database, path, options = {}) {
+  try {
+    return await callEvolutionApi(database, path, options);
+  } catch (error) {
+    return { ignored: true, status: error?.status, message: error?.message ?? "erro ignorado" };
+  }
+}
+
+async function resetEvolutionInstance(database) {
+  const { instance } = getEvolutionConfig(database);
+  const encodedInstance = encodeURIComponent(instance);
+
+  await tryEvolutionApi(database, `/instance/logout/${encodedInstance}`, { method: "DELETE" });
+  await tryEvolutionApi(database, `/instance/delete/${encodedInstance}`, { method: "DELETE" });
+
+  const createPayload = await callEvolutionApi(database, "/instance/create", {
+    method: "POST",
+    body: JSON.stringify({
+      instanceName: instance,
+      qrcode: true,
+      integration: "WHATSAPP-BAILEYS",
+    }),
+  });
+
+  let qrCode = extractQrCode(createPayload);
+
+  if (!qrCode.image && !qrCode.code) {
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    const connectPayload = await callEvolutionApi(database, `/instance/connect/${encodedInstance}`);
+    qrCode = extractQrCode(connectPayload);
+  }
+
+  database.evolution = {
+    ...(database.evolution ?? defaultDatabase.evolution),
+    instance,
+    instanceManagedByApp: true,
+    lastResetAt: new Date().toISOString(),
+  };
+
+  return { instance, qrCode };
+}
+
 function extractQrCode(payload) {
   const candidates = [
     payload?.base64,
@@ -760,6 +802,15 @@ async function routeRequest(request, response) {
       await writeDatabase(database);
 
       jsonResponse(response, 200, { ok: true, instance, created: instanceStatus.created, qrCode });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/evolution/reset") {
+      const database = await ensureDatabase();
+      const { instance, qrCode } = await resetEvolutionInstance(database);
+      await writeDatabase(database);
+
+      jsonResponse(response, 200, { ok: true, instance, reset: true, qrCode });
       return;
     }
 

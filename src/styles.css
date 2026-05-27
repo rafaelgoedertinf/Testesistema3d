@@ -1041,7 +1041,7 @@ textarea:focus {
 
 .evolution-actions {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.7rem;
   margin-top: 0.75rem;
 }
@@ -1074,6 +1074,13 @@ textarea:focus {
 .qr-code-panel span {
   color: var(--muted);
   line-height: 1.5;
+}
+
+
+.secondary-action.danger-soft {
+  color: #fecdd3;
+  border-color: rgba(251, 113, 133, 0.28);
+  background: rgba(251, 113, 133, 0.1);
 }
 
 .secondary-action:disabled,

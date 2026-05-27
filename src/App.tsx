@@ -399,7 +399,7 @@ function App() {
   const [settingsStatus, setSettingsStatus] = useState("");
   const [evolutionActionStatus, setEvolutionActionStatus] = useState("");
   const [evolutionQrCode, setEvolutionQrCode] = useState<EvolutionQrCodeResult["qrCode"] | null>(null);
-  const [evolutionBusy, setEvolutionBusy] = useState<"" | "test" | "qrcode">("");
+  const [evolutionBusy, setEvolutionBusy] = useState<"" | "test" | "qrcode" | "reset">("");
 
   useEffect(() => {
     if (!isAuthenticated || !sessionToken) return;
@@ -720,6 +720,35 @@ function App() {
     }
   }
 
+  async function resetEvolutionConnection() {
+    setEvolutionActionStatus("");
+    setEvolutionQrCode(null);
+
+    if (!sessionToken) {
+      setEvolutionActionStatus("Entre novamente para reiniciar a conexao.");
+      return;
+    }
+
+    setEvolutionBusy("reset");
+    try {
+      const result = await apiRequest<EvolutionQrCodeResult>("/api/evolution/reset", {
+        method: "POST",
+        token: sessionToken,
+      });
+      setApiStatus("online");
+      setEvolutionQrCode(result.qrCode);
+      setEvolutionActionStatus(
+        result.qrCode.image || result.qrCode.code
+          ? `Conexao reiniciada e QR Code novo gerado para ${result.instance}.`
+          : `Conexao reiniciada, mas a Evolution nao retornou um QR Code reconhecido.`,
+      );
+    } catch (error) {
+      setEvolutionActionStatus(error instanceof Error ? error.message : "Nao foi possivel reiniciar a conexao.");
+    } finally {
+      setEvolutionBusy("");
+    }
+  }
+
   if (!isAuthenticated) {
     return (
       <main className="login-shell">
@@ -894,6 +923,7 @@ function App() {
             evolutionBusy={evolutionBusy}
             testEvolutionConnection={testEvolutionConnection}
             generateEvolutionQrCode={generateEvolutionQrCode}
+            resetEvolutionConnection={resetEvolutionConnection}
           />
         )}
       </main>
@@ -1369,6 +1399,7 @@ function SettingsView({
   evolutionBusy,
   testEvolutionConnection,
   generateEvolutionQrCode,
+  resetEvolutionConnection,
 }: {
   stages: string[];
   tags: string[];
@@ -1387,9 +1418,10 @@ function SettingsView({
   settingsStatus: string;
   evolutionActionStatus: string;
   evolutionQrCode: EvolutionQrCodeResult["qrCode"] | null;
-  evolutionBusy: "" | "test" | "qrcode";
+  evolutionBusy: "" | "test" | "qrcode" | "reset";
   testEvolutionConnection: () => void;
   generateEvolutionQrCode: () => void;
+  resetEvolutionConnection: () => void;
 }) {
   const publicBaseUrl = API_BASE_URL || window.location.origin;
   const apiIntegrationUrl = `${publicBaseUrl}/api/evolution`;
@@ -1463,6 +1495,14 @@ function SettingsView({
             >
               {evolutionBusy === "qrcode" ? "Gerando..." : "Gerar QR Code"}
             </button>
+            <button
+              className="secondary-action full danger-soft"
+              type="button"
+              onClick={resetEvolutionConnection}
+              disabled={evolutionBusy !== ""}
+            >
+              {evolutionBusy === "reset" ? "Reiniciando..." : "Reiniciar conexao"}
+            </button>
           </div>
           {evolutionActionStatus && <div className="settings-status compact">{evolutionActionStatus}</div>}
           {evolutionQrCode && (
@@ -1472,7 +1512,7 @@ function SettingsView({
               ) : (
                 <strong>{evolutionQrCode.code || "QR Code recebido sem imagem."}</strong>
               )}
-              <span>Abra o WhatsApp no celular, va em aparelhos conectados e escaneie este codigo.</span>
+              <span>Abra o WhatsApp no celular, va em aparelhos conectados e escaneie este codigo. Se o celular disser "tente mais tarde", clique em Reiniciar conexao para gerar um QR totalmente novo.</span>
             </div>
           )}
         </form>
