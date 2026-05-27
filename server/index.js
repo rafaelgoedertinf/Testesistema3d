@@ -890,6 +890,136 @@ async function sendEvolutionAudio(database, instance, remoteJid, phone, media) {
   return sendEvolutionMedia(database, instance, remoteJid, phone, { ...media, mediaType: "audio" });
 }
 
+function normalizeDisplayName(value) {
+  const text = String(value ?? "").trim().toLowerCase();
+  if (!text || text.startsWith("+") || /^\d+$/.test(text.replace(/\D/g, ""))) return "";
+  return text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ");
+}
+
+function conversationQualityScore(conversation) {
+  const number = extractPhone(conversation.number || conversation.phone);
+  let score = 0;
+  if (number) score += 10;
+  if (number.startsWith("55")) score += 20;
+  if (!String(conversation.remoteJid || "").endsWith("@lid")) score += 8;
+  if (conversation.profilePicUrl) score += 5;
+  if (normalizeDisplayName(conversation.name)) score += 4;
+  score += Math.min(Number(conversation.unread ?? 0), 5);
+  return score;
+}
+
+function chooseCanonicalConversation(items) {
+  return [...items].sort((a, b) => {
+    const quality = conversationQualityScore(b) - conversationQualityScore(a);
+    if (quality !== 0) return quality;
+    return new Date(b.lastMessageAt ?? 0).getTime() - new Date(a.lastMessageAt ?? 0).getTime();
+  })[0];
+}
+
+function buildConversationAliasResolution(conversations) {
+  const groups = new Map();
+
+  for (const conversation of conversations ?? []) {
+    const number = extractPhone(conversation.number || conversation.phone);
+    const displayName = normalizeDisplayName(conversation.name);
+    const keys = [];
+
+    if (number && !String(conversation.remoteJid || "").endsWith("@lid")) keys.push(`phone:${number}`);
+    if (displayName) keys.push(`name:${displayName}`);
+    if (!keys.length) keys.push(`jid:${conversation.remoteJid || conversation.id}`);
+
+    for (const key of keys) {
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(conversation);
+    }
+  }
+
+  // Merge overlapping groups until stable.
+  let changed = true;
+  while (changed) {
+    changed = false;
+    const entries = Array.from(groups.entries());
+    for (let i = 0; i < entries.length; i += 1) {
+      for (let j = i + 1; j < entries.length; j += 1) {
+        const [keyA, groupA] = entries[i];
+        const [keyB, groupB] = entries[j];
+        if (!groups.has(keyA) || !groups.has(keyB)) continue;
+        const idsA = new Set(groupA.map((item) => item.remoteJid || item.id));
+        const intersects = groupB.some((item) => idsA.has(item.remoteJid || item.id));
+        if (intersects) {
+          groups.set(keyA, dedupeConversations([...groupA, ...groupB]));
+          groups.delete(keyB);
+          changed = true;
+        }
+      }
+    }
+  }
+
+  const aliasToCanonical = new Map();
+  const canonicalItems = [];
+
+  for (const group of groups.values()) {
+    const canonical = chooseCanonicalConversation(group);
+    const latest = [...group].sort(
+      (a, b) => new Date(b.lastMessageAt ?? 0).getTime() - new Date(a.lastMessageAt ?? 0).getTime(),
+    )[0];
+    const maxReadAt = group
+      .map((item) => new Date(item.lastReadAt ?? 0).getTime())
+      .filter(Number.isFinite)
+      .reduce((max, value) => Math.max(max, value), 0);
+    const aliases = Array.from(new Set(group.flatMap((item) => [item.remoteJid, item.id, ...(item.aliases ?? [])]).filter(Boolean)));
+    const bestNumber = group
+      .map((item) => extractPhone(item.number || item.phone))
+      .filter(Boolean)
+      .sort((a, b) => (b.startsWith("55") ? 1 : 0) - (a.startsWith("55") ? 1 : 0) || b.length - a.length)[0];
+    const bestName = group.find((item) => normalizeDisplayName(item.name))?.name || canonical.name;
+
+    const merged = {
+      ...canonical,
+      ...latest,
+      id: canonical.remoteJid || canonical.id,
+      remoteJid: canonical.remoteJid || canonical.id,
+      aliases,
+      name: bestName,
+      phone: bestNumber ? `+${bestNumber}` : canonical.phone,
+      number: bestNumber || canonical.number,
+      profilePicUrl: canonical.profilePicUrl || group.find((item) => item.profilePicUrl)?.profilePicUrl || "",
+      lastReadAt: maxReadAt ? new Date(maxReadAt).toISOString() : canonical.lastReadAt,
+    };
+
+    for (const alias of aliases) aliasToCanonical.set(alias, merged.remoteJid);
+    canonicalItems.push(merged);
+  }
+
+  return { conversations: dedupeConversations(canonicalItems), aliasToCanonical };
+}
+
+function remapMessagesToCanonical(messages, aliasToCanonical) {
+  return (messages ?? []).map((message) => {
+    const current = message.remoteJid || message.conversationId;
+    const canonical = aliasToCanonical.get(current) || current;
+    return { ...message, remoteJid: canonical, conversationId: canonical };
+  });
+}
+
+function applyUnreadCounts(conversations, messages) {
+  return (conversations ?? []).map((conversation) => {
+    const remoteJid = conversation.remoteJid || conversation.id;
+    const lastReadTime = new Date(conversation.lastReadAt ?? 0).getTime();
+    const conversationMessages = (messages ?? []).filter((message) => (message.remoteJid || message.conversationId) === remoteJid);
+    const incomingUnread = conversationMessages.filter(
+      (message) => message.from === "lead" && Number(message.timestamp ?? 0) > lastReadTime,
+    ).length;
+    const latest = conversationMessages[conversationMessages.length - 1];
+    return {
+      ...conversation,
+      unread: incomingUnread,
+      lastMessage: latest?.body || conversation.lastMessage,
+      lastMessageAt: latest?.timestamp ? new Date(latest.timestamp).toISOString() : conversation.lastMessageAt,
+    };
+  });
+}
+
 async function syncWhatsAppHistory(database, options = {}) {
   const { instance } = getEvolutionConfig(database);
   await ensureEvolutionInstance(database);
@@ -944,12 +1074,16 @@ async function syncWhatsAppHistory(database, options = {}) {
     (message) => message.source === "evolution" || message.remoteJid || message.conversationId,
   );
 
-  const mergedConversations = dedupeConversations(mergeByKey(existingEvolutionConversations, conversations, (item) => item.remoteJid || item.id));
-  const mergedMessages = mergeByKey(existingEvolutionMessages, importedMessages, (item) => item.evolutionMessageId || item.id);
+  const preMergedConversations = mergeByKey(existingEvolutionConversations, conversations, (item) => item.remoteJid || item.id);
+  const { conversations: canonicalConversations, aliasToCanonical } = buildConversationAliasResolution(preMergedConversations);
+  const remappedExistingMessages = remapMessagesToCanonical(existingEvolutionMessages, aliasToCanonical);
+  const remappedImportedMessages = remapMessagesToCanonical(importedMessages, aliasToCanonical);
+  const mergedMessages = mergeByKey(remappedExistingMessages, remappedImportedMessages, (item) => item.evolutionMessageId || item.id);
 
   mergedMessages.sort((a, b) => Number(a.timestamp ?? 0) - Number(b.timestamp ?? 0));
+  const mergedConversations = applyUnreadCounts(canonicalConversations, mergedMessages);
   mergedConversations.sort(
-    (a, b) => new Date(b.lastMessageAt ?? 0).getTime() - new Date(a.lastMessageAt ?? 0).getTime(),
+    (a, b) => Number(b.unread ?? 0) - Number(a.unread ?? 0) || new Date(b.lastMessageAt ?? 0).getTime() - new Date(a.lastMessageAt ?? 0).getTime(),
   );
 
   database.conversations = mergedConversations;
@@ -1331,6 +1465,22 @@ async function routeRequest(request, response) {
         conversations: database.conversations,
         messages: database.messages,
       });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/whatsapp/read") {
+      const body = await readJsonBody(request);
+      const database = await ensureDatabase();
+      const remoteJid = normalizeRemoteJid(body.remoteJid || body.conversationId);
+      const now = new Date().toISOString();
+
+      database.conversations = (database.conversations ?? []).map((conversation) => {
+        const matches = (conversation.remoteJid || conversation.id) === remoteJid || (conversation.aliases ?? []).includes(remoteJid);
+        return matches ? { ...conversation, unread: 0, lastReadAt: now } : conversation;
+      });
+      await writeDatabase(database);
+
+      jsonResponse(response, 200, { ok: true, remoteJid, lastReadAt: now });
       return;
     }
 

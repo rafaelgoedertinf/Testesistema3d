@@ -56,6 +56,8 @@ type Lead = {
 type Conversation = {
   id: number | string;
   remoteJid?: string;
+  aliases?: string[];
+  lastReadAt?: string;
   name: string;
   phone: string;
   number?: string;
@@ -729,6 +731,27 @@ function App() {
     setIsNewConversationOpen(false);
   }
 
+  async function markConversationRead(conversation: Conversation) {
+    const remoteJid = conversation.remoteJid ?? String(conversation.id);
+    setConversationList((current) =>
+      current.map((item) =>
+        (item.remoteJid ?? item.id) === remoteJid || item.id === conversation.id ? { ...item, unread: 0 } : item,
+      ),
+    );
+    setSelectedConversation({ ...conversation, unread: 0 });
+
+    if (!sessionToken) return;
+    try {
+      await apiRequest<{ ok: boolean }>("/api/whatsapp/read", {
+        method: "POST",
+        token: sessionToken,
+        body: JSON.stringify({ remoteJid, conversationId: conversation.id }),
+      });
+    } catch {
+      // Reading state is best-effort; syncing will reconcile later.
+    }
+  }
+
   async function syncWhatsApp(silent = false) {
     if (!silent) {
       setWhatsAppSyncStatus("Sincronizando conversas e mensagens...");
@@ -1187,6 +1210,7 @@ function App() {
             messages={chatMessages}
             selectedConversation={selectedConversation}
             setSelectedConversation={setSelectedConversation}
+            markConversationRead={markConversationRead}
             messageDraft={messageDraft}
             setMessageDraft={setMessageDraft}
             syncWhatsApp={syncWhatsApp}
@@ -1405,6 +1429,7 @@ function WhatsAppView({
   messages,
   selectedConversation,
   setSelectedConversation,
+  markConversationRead,
   messageDraft,
   setMessageDraft,
   syncWhatsApp,
@@ -1426,6 +1451,7 @@ function WhatsAppView({
   messages: Message[];
   selectedConversation: Conversation;
   setSelectedConversation: (conversation: Conversation) => void;
+  markConversationRead: (conversation: Conversation) => void;
   messageDraft: string;
   setMessageDraft: (value: string) => void;
   syncWhatsApp: () => void;
@@ -1444,11 +1470,12 @@ function WhatsAppView({
   startNewConversation: (event: FormEvent<HTMLFormElement>) => void;
 }) {
   const selectedRemoteJid = selectedConversation.remoteJid ?? selectedConversation.id;
+  const selectedAliases = new Set([selectedRemoteJid, selectedConversation.id, ...(selectedConversation.aliases ?? [])]);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const [isAttachMenuOpen, setIsAttachMenuOpen] = useState(false);
   const visibleMessages = messages.filter((message) => {
     if (message.remoteJid || message.conversationId) {
-      return (message.remoteJid ?? message.conversationId) === selectedRemoteJid;
+      return selectedAliases.has(message.remoteJid ?? message.conversationId ?? "");
     }
 
     return conversations.length <= 3;
@@ -1521,7 +1548,7 @@ function WhatsAppView({
             key={conversation.id}
             className={conversation.id === selectedConversation.id ? "conversation active" : "conversation"}
             onClick={() => {
-              setSelectedConversation({ ...conversation, unread: 0 });
+              markConversationRead(conversation);
             }}
           >
             <div className="avatar">{conversation.profilePicUrl ? <img src={conversation.profilePicUrl} alt={conversation.name} /> : (conversation.name || conversation.phone).charAt(0)}</div>
@@ -1626,18 +1653,28 @@ function MessageContent({ message }: { message: Message }) {
   const isImage = message.mimeType?.startsWith("image/") || message.mediaUrl?.startsWith("data:image");
   const isVideo = message.kind === "video" || message.mimeType?.startsWith("video/");
   const isAudio = message.kind === "audio" || message.mimeType?.startsWith("audio/");
+  const canOpenMedia = Boolean(
+    message.mediaUrl?.startsWith("data:") || message.mediaUrl?.startsWith("http://") || message.mediaUrl?.startsWith("https://") || message.mediaUrl?.startsWith("blob:"),
+  );
 
-  if (message.mediaUrl) {
+  if (message.mediaUrl || message.fileName || message.thumbnail) {
     return (
       <span className="message-content">
-        {isImage && <img className="message-media" src={message.mediaUrl} alt={message.fileName || "Imagem"} />}
-        {isVideo && <video className="message-media" src={message.mediaUrl} controls />}
-        {isAudio && <audio className="message-audio" src={message.mediaUrl} controls />}
-        {!isImage && !isVideo && !isAudio && (
-          <a className="message-file" href={message.mediaUrl} target="_blank" rel="noreferrer">
-            <FileText size={18} />
-            {message.fileName || "Abrir arquivo"}
-          </a>
+        {isImage && canOpenMedia && <img className="message-media" src={message.mediaUrl} alt={message.fileName || "Imagem"} />}
+        {isVideo && canOpenMedia && <video className="message-media" src={message.mediaUrl} controls />}
+        {isAudio && canOpenMedia && <audio className="message-audio" src={message.mediaUrl} controls />}
+        {(!isImage || !canOpenMedia) && (!isVideo || !canOpenMedia) && (!isAudio || !canOpenMedia) && (
+          canOpenMedia ? (
+            <a className="message-file" href={message.mediaUrl} target="_blank" rel="noreferrer">
+              <FileText size={18} />
+              {message.fileName || "Abrir arquivo"}
+            </a>
+          ) : (
+            <span className="message-file unavailable">
+              <FileText size={18} />
+              {message.fileName || "Arquivo recebido"}
+            </span>
+          )
         )}
         {message.body && <span>{message.body}</span>}
       </span>
