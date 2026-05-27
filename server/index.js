@@ -19,6 +19,8 @@ const pgPool = databaseUrl
       ssl: process.env.POSTGRES_SSL === "false" ? false : { rejectUnauthorized: false },
     })
   : null;
+let storageMode = pgPool ? "postgres" : "local-json";
+let lastPostgresError = "";
 
 const SEEDED_USER = {
   id: "usr_rafael",
@@ -221,30 +223,58 @@ async function ensurePostgresState() {
   return seed;
 }
 
-async function ensureDatabase() {
-  if (pgPool) return ensurePostgresState();
-
+async function ensureLocalDatabase() {
   await mkdir(dirname(dbPath), { recursive: true });
   try {
     return JSON.parse(await readFile(dbPath, "utf8"));
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
-    await writeDatabase(defaultDatabase);
-    return structuredClone(defaultDatabase);
+    const seed = structuredClone(defaultDatabase);
+    await writeLocalDatabase(seed);
+    return seed;
   }
 }
 
-async function writeDatabase(database) {
-  if (pgPool) {
-    await pgPool.query(
-      "INSERT INTO app_state (id, data, updated_at) VALUES ($1, $2::jsonb, now()) ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, updated_at = now()",
-      ["default", JSON.stringify(database)],
-    );
-    return;
-  }
-
+async function writeLocalDatabase(database) {
   await mkdir(dirname(dbPath), { recursive: true });
   await writeFile(dbPath, `${JSON.stringify(database, null, 2)}\n`);
+}
+
+function rememberPostgresError(error) {
+  lastPostgresError = error?.code ? String(error.code) : String(error?.message ?? error);
+  storageMode = "local-json-fallback";
+  console.error("Postgres indisponivel; usando fallback local:", lastPostgresError);
+}
+
+async function ensureDatabase() {
+  if (pgPool) {
+    try {
+      const database = await ensurePostgresState();
+      storageMode = "postgres";
+      lastPostgresError = "";
+      return database;
+    } catch (error) {
+      rememberPostgresError(error);
+    }
+  }
+
+  return ensureLocalDatabase();
+}
+
+async function writeDatabase(database) {
+  if (pgPool && storageMode === "postgres") {
+    try {
+      await pgPool.query(
+        "INSERT INTO app_state (id, data, updated_at) VALUES ($1, $2::jsonb, now()) ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, updated_at = now()",
+        ["default", JSON.stringify(database)],
+      );
+      return;
+    } catch (error) {
+      rememberPostgresError(error);
+    }
+  }
+
+  await writeLocalDatabase(database);
 }
 
 function hashPassword(password) {
@@ -355,7 +385,25 @@ async function routeRequest(request, response) {
 
   try {
     if (request.method === "GET" && url.pathname === "/api/health") {
-      jsonResponse(response, 200, { status: "ok", service: "Atendedor 2.0 API" });
+      jsonResponse(response, 200, {
+        status: "ok",
+        service: "Atendedor 2.0 API",
+        storage: {
+          mode: storageMode,
+          postgresConfigured: Boolean(pgPool),
+          postgresHealthy: storageMode === "postgres" && !lastPostgresError,
+        },
+      });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/diagnostics/storage") {
+      jsonResponse(response, 200, {
+        storageMode,
+        postgresConfigured: Boolean(pgPool),
+        postgresHealthy: storageMode === "postgres" && !lastPostgresError,
+        lastPostgresError,
+      });
       return;
     }
 
@@ -539,5 +587,5 @@ async function routeRequest(request, response) {
 
 createServer(routeRequest).listen(port, () => {
   console.log(`Atendedor 2.0 rodando em http://localhost:${port}`);
-  console.log(pgPool ? "Persistencia online: Postgres" : "Persistencia local: data/atendedor-db.json");
+  console.log(pgPool ? "Persistencia online: Postgres com fallback local" : "Persistencia local: data/atendedor-db.json");
 });

@@ -64,6 +64,15 @@ DATABASE_URL=cole-a-url-do-supabase
 
 7. Clique em **Deploy**.
 
+
+### Observacao sobre a DATABASE_URL do Supabase
+
+Se o login online retornar erro mesmo com o app no ar, use a string do **Transaction pooler** no Supabase em vez de **Direct connection**. Ela costuma ser mais compativel com hospedagens online.
+
+Se a senha do banco tiver caracteres especiais como `#`, `@`, `%`, `/` ou espaco, gere uma nova senha simples/forte no Supabase ou aplique URL encode antes de colar na `DATABASE_URL`.
+
+O app possui fallback local para nao travar o login quando o banco estiver mal configurado, mas para uso real 24/7 o ideal e deixar o Supabase conectado corretamente.
+
 ## Passo 3: configurar o subdominio do Registro.br
 
 No Render, abra o servico publicado e va em **Settings > Custom Domains**.
