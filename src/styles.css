@@ -842,6 +842,17 @@ textarea:focus {
   color: rgba(5, 46, 43, 0.72);
 }
 
+
+.message.selected {
+  outline: 2px solid rgba(45, 212, 191, 0.55);
+  outline-offset: 2px;
+}
+
+.conversation strong,
+.conversation span {
+  max-width: 190px;
+}
+
 .message.system {
   align-self: center;
   max-width: 90%;
@@ -1220,7 +1231,7 @@ textarea:focus {
   }
 
   .whatsapp-layout {
-    grid-template-columns: 280px minmax(380px, 1fr);
+    grid-template-columns: minmax(250px, 0.85fr) minmax(360px, 1.4fr);
   }
 
   .lead-inspector {
@@ -1258,6 +1269,15 @@ textarea:focus {
 
   .whatsapp-layout {
     grid-template-columns: 1fr;
+    min-height: auto;
+  }
+
+  .chat-panel {
+    min-height: 620px;
+  }
+
+  .chat-actions {
+    flex-wrap: wrap;
   }
 
   .conversation-list {
@@ -1295,4 +1315,18 @@ textarea:focus {
   .message {
     max-width: 92%;
   }
+
+  .composer {
+    flex-wrap: wrap;
+  }
+
+  .composer input {
+    min-width: 180px;
+  }
+
+  .conversation strong,
+  .conversation span {
+    max-width: 70vw;
+  }
+
 }

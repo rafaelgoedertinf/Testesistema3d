@@ -552,6 +552,58 @@ function phoneFromJid(jid) {
   return digits ? `+${digits}` : "WhatsApp";
 }
 
+function extractPhone(value) {
+  const digits = String(value ?? "").replace(/\D/g, "");
+  return digits.length >= 10 && digits.length <= 15 ? digits : "";
+}
+
+function formatPhone(value) {
+  const digits = extractPhone(value);
+  return digits ? `+${digits}` : "WhatsApp";
+}
+
+function getContactRemoteJids(contact) {
+  return [
+    contact?.remoteJid,
+    contact?.id,
+    contact?.jid,
+    contact?.lid,
+    contact?.contact?.remoteJid,
+    contact?.key?.remoteJid,
+  ]
+    .map(normalizeRemoteJid)
+    .filter(Boolean);
+}
+
+function getContactPhone(contact) {
+  return (
+    extractPhone(contact?.number) ||
+    extractPhone(contact?.phone) ||
+    extractPhone(contact?.waId) ||
+    extractPhone(contact?.id?.includes("@s.whatsapp.net") ? contact.id : "") ||
+    extractPhone(contact?.remoteJid?.includes("@s.whatsapp.net") ? contact.remoteJid : "") ||
+    extractPhone(contact?.jid?.includes("@s.whatsapp.net") ? contact.jid : "")
+  );
+}
+
+function createContactMap(contacts) {
+  const map = new Map();
+  for (const contact of contacts ?? []) {
+    const phone = getContactPhone(contact);
+    const name = contact?.pushName || contact?.name || contact?.notify || contact?.verifiedName || "";
+    const info = { phone: phone ? `+${phone}` : "", number: phone, name };
+
+    for (const jid of getContactRemoteJids(contact)) {
+      map.set(jid, { ...(map.get(jid) ?? {}), ...info });
+    }
+
+    if (phone) {
+      map.set(`${phone}@s.whatsapp.net`, { ...(map.get(`${phone}@s.whatsapp.net`) ?? {}), ...info });
+    }
+  }
+  return map;
+}
+
 function getConversationName(chat, remoteJid) {
   return (
     chat?.pushName ||
@@ -624,17 +676,21 @@ function getMessageKind(message) {
   return "text";
 }
 
-function normalizeConversation(chat, index = 0) {
+function normalizeConversation(chat, index = 0, contactMap = new Map()) {
   const remoteJid = normalizeRemoteJid(
     chat?.remoteJid || chat?.id || chat?.jid || chat?.key?.remoteJid || chat?.contact?.remoteJid || chat?.number,
   );
   const timestamp = getTimestampMillis(chat?.updatedAt || chat?.messageTimestamp || chat?.lastMessage?.messageTimestamp);
+  const contactInfo = contactMap.get(remoteJid) ?? {};
+  const phone = contactInfo.phone || formatPhone(chat?.number || chat?.phone || remoteJid);
+  const name = contactInfo.name || getConversationName(chat, remoteJid);
 
   return {
     id: remoteJid || `chat-${Date.now()}-${index}`,
     remoteJid,
-    name: getConversationName(chat, remoteJid),
-    phone: phoneFromJid(remoteJid),
+    name: name === phoneFromJid(remoteJid) && phone !== "WhatsApp" ? phone : name,
+    phone,
+    number: contactInfo.number || extractPhone(phone),
     state: "--",
     status: chat?.presence || chat?.status || "sincronizado",
     lastMessage: getLastMessageText(chat),
@@ -674,6 +730,66 @@ function mergeByKey(existing, incoming, getKey) {
   return Array.from(map.values());
 }
 
+function getRecipientCandidates(remoteJid, phone) {
+  const candidates = [];
+  const normalizedJid = normalizeRemoteJid(remoteJid);
+  const phoneDigits = extractPhone(phone);
+  const jidDigits = extractPhone(normalizedJid?.includes("@s.whatsapp.net") ? normalizedJid : "");
+
+  if (phoneDigits) candidates.push(phoneDigits);
+  if (jidDigits) candidates.push(jidDigits);
+  if (normalizedJid?.endsWith("@lid")) candidates.push(normalizedJid);
+  if (normalizedJid && !normalizedJid.endsWith("@s.whatsapp.net")) candidates.push(normalizedJid.split("@")[0]);
+
+  return Array.from(new Set(candidates.filter(Boolean)));
+}
+
+async function sendEvolutionText(database, instance, remoteJid, phone, text) {
+  const candidates = getRecipientCandidates(remoteJid, phone);
+  const errors = [];
+
+  for (const number of candidates) {
+    try {
+      const payload = await callEvolutionApi(database, `/message/sendText/${encodeURIComponent(instance)}`, {
+        method: "POST",
+        body: JSON.stringify({ number, text }),
+      });
+      return { payload, number };
+    } catch (error) {
+      errors.push(`${number}: ${error.message}`);
+    }
+  }
+
+  throw new Error(`Nao foi possivel enviar pela Evolution. Tentativas: ${errors.join(" | ")}`);
+}
+
+async function sendEvolutionMedia(database, instance, remoteJid, phone, media) {
+  const candidates = getRecipientCandidates(remoteJid, phone);
+  const errors = [];
+  const mediatype = media.mediaType || "document";
+
+  for (const number of candidates) {
+    try {
+      const payload = await callEvolutionApi(database, `/message/sendMedia/${encodeURIComponent(instance)}`, {
+        method: "POST",
+        body: JSON.stringify({
+          number,
+          mediatype,
+          mimetype: media.mimeType,
+          caption: media.caption || "",
+          media: media.data,
+          fileName: media.fileName || "arquivo",
+        }),
+      });
+      return { payload, number };
+    } catch (error) {
+      errors.push(`${number}: ${error.message}`);
+    }
+  }
+
+  throw new Error(`Nao foi possivel enviar midia pela Evolution. Tentativas: ${errors.join(" | ")}`);
+}
+
 async function syncWhatsAppHistory(database) {
   const { instance } = getEvolutionConfig(database);
   await ensureEvolutionInstance(database);
@@ -685,20 +801,18 @@ async function syncWhatsAppHistory(database) {
     ["chats", "data", "records"],
   );
 
-  let chatItems = chatsResult.items;
+  const contactsResult = await callEvolutionApiOptional(
+    database,
+    `/chat/findContacts/${encodeURIComponent(instance)}`,
+    { method: "POST", body: JSON.stringify({}) },
+    ["contacts", "data", "records"],
+  );
 
-  if (!chatItems.length) {
-    const contactsResult = await callEvolutionApiOptional(
-      database,
-      `/chat/findContacts/${encodeURIComponent(instance)}`,
-      { method: "POST", body: JSON.stringify({}) },
-      ["contacts", "data", "records"],
-    );
-    chatItems = contactsResult.items;
-  }
+  let chatItems = chatsResult.items.length ? chatsResult.items : contactsResult.items;
+  const contactMap = createContactMap(contactsResult.items);
 
   const conversations = chatItems
-    .map((chat, index) => normalizeConversation(chat, index))
+    .map((chat, index) => normalizeConversation(chat, index, contactMap))
     .filter((conversation) => conversation.remoteJid && !conversation.remoteJid.includes("status@broadcast"));
 
   const importedMessages = [];
@@ -1129,11 +1243,10 @@ async function routeRequest(request, response) {
         return;
       }
 
-      const number = remoteJid.split("@")[0];
-      const payload = await callEvolutionApi(database, `/message/sendText/${encodeURIComponent(instance)}`, {
-        method: "POST",
-        body: JSON.stringify({ number, text }),
-      });
+      const conversation = (database.conversations ?? []).find(
+        (item) => (item.remoteJid || item.id) === remoteJid || String(item.id) === String(body.conversationId ?? ""),
+      );
+      const { payload } = await sendEvolutionText(database, instance, remoteJid, conversation?.phone, text);
 
       const timestamp = Date.now();
       const message = {
@@ -1155,6 +1268,49 @@ async function routeRequest(request, response) {
           ? { ...conversation, lastMessage: text, lastMessageAt: new Date(timestamp).toISOString() }
           : conversation,
       );
+      await writeDatabase(database);
+
+      jsonResponse(response, 200, { ok: true, message });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/whatsapp/send-media") {
+      const body = await readJsonBody(request);
+      const database = await ensureDatabase();
+      const { instance } = getEvolutionConfig(database);
+      const remoteJid = normalizeRemoteJid(body.remoteJid);
+      const conversation = (database.conversations ?? []).find(
+        (item) => (item.remoteJid || item.id) === remoteJid || String(item.id) === String(body.conversationId ?? ""),
+      );
+
+      if (!remoteJid || !body.data || !body.mimeType) {
+        jsonResponse(response, 400, { error: "Conversa e arquivo sao obrigatorios." });
+        return;
+      }
+
+      const { payload } = await sendEvolutionMedia(database, instance, remoteJid, conversation?.phone, {
+        data: body.data,
+        mimeType: body.mimeType,
+        fileName: body.fileName,
+        caption: body.caption,
+        mediaType: body.mediaType,
+      });
+
+      const timestamp = Date.now();
+      const message = {
+        id: payload?.key?.id || payload?.messageId || `local-media-${remoteJid}-${timestamp}`,
+        evolutionMessageId: payload?.key?.id || payload?.messageId || "",
+        conversationId: remoteJid,
+        remoteJid,
+        from: "agent",
+        body: body.caption || body.fileName || "Arquivo enviado",
+        time: formatMessageTime(timestamp),
+        timestamp,
+        kind: body.mediaType === "audio" ? "audio" : body.mediaType === "video" ? "video" : "file",
+        source: "evolution",
+      };
+
+      database.messages = mergeByKey(database.messages ?? [], [message], (item) => item.evolutionMessageId || item.id);
       await writeDatabase(database);
 
       jsonResponse(response, 200, { ok: true, message });
