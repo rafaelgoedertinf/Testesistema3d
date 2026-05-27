@@ -1456,3 +1456,23 @@ textarea:focus {
   0%, 100% { transform: scale(1); }
   50% { transform: scale(1.08); }
 }
+
+.message-download {
+  width: fit-content;
+  padding: 0.35rem 0.65rem;
+  color: #052e2b;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(45, 212, 191, 0.85);
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+.message-file.unavailable {
+  width: fit-content;
+  cursor: pointer;
+  border: 1px solid rgba(45, 212, 191, 0.25);
+  background: rgba(45, 212, 191, 0.1);
+  border-radius: 12px;
+  padding: 0.55rem 0.7rem;
+}

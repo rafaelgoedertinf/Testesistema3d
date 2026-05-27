@@ -765,13 +765,26 @@ function normalizeMessage(message, remoteJid, index = 0) {
     mimeType: mediaInfo.mimeType,
     source: "evolution",
     rawType: Object.keys(message?.message ?? message ?? {})[0] ?? "unknown",
+    rawMessage: message,
   };
 }
 
 function mergeByKey(existing, incoming, getKey) {
   const map = new Map();
   for (const item of existing ?? []) map.set(getKey(item), item);
-  for (const item of incoming ?? []) map.set(getKey(item), { ...(map.get(getKey(item)) ?? {}), ...item });
+  for (const item of incoming ?? []) {
+    const key = getKey(item);
+    const previous = map.get(key) ?? {};
+    map.set(key, {
+      ...previous,
+      ...item,
+      mediaUrl: item.mediaUrl || previous.mediaUrl || "",
+      thumbnail: item.thumbnail || previous.thumbnail || "",
+      fileName: item.fileName || previous.fileName || "",
+      mimeType: item.mimeType || previous.mimeType || "",
+      rawMessage: item.rawMessage || previous.rawMessage,
+    });
+  }
   return Array.from(map.values());
 }
 
@@ -1009,9 +1022,9 @@ function applyUnreadCounts(conversations, messages) {
     const remoteJid = conversation.remoteJid || conversation.id;
     const lastReadTime = new Date(conversation.lastReadAt ?? 0).getTime();
     const conversationMessages = (messages ?? []).filter((message) => (message.remoteJid || message.conversationId) === remoteJid);
-    const incomingUnread = conversationMessages.filter(
-      (message) => message.from === "lead" && Number(message.timestamp ?? 0) > lastReadTime,
-    ).length;
+    const incomingUnread = lastReadTime
+      ? conversationMessages.filter((message) => message.from === "lead" && Number(message.timestamp ?? 0) > lastReadTime).length
+      : Number(conversation.unread ?? 0);
     const latest = conversationMessages[conversationMessages.length - 1];
     return {
       ...conversation,
@@ -1497,6 +1510,59 @@ async function routeRequest(request, response) {
       await writeDatabase(database);
 
       jsonResponse(response, 200, { ok: true, remoteJid, lastReadAt: now });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname.startsWith("/api/whatsapp/media/")) {
+      const messageId = decodeURIComponent(url.pathname.split("/").at(-1) ?? "");
+      const database = await ensureDatabase();
+      const { instance } = getEvolutionConfig(database);
+      const message = (database.messages ?? []).find(
+        (item) => String(item.id) === messageId || String(item.evolutionMessageId) === messageId,
+      );
+
+      if (!message) {
+        jsonResponse(response, 404, { error: "Arquivo nao encontrado no historico." });
+        return;
+      }
+
+      if (message.mediaUrl?.startsWith("data:") || message.mediaUrl?.startsWith("http")) {
+        jsonResponse(response, 200, {
+          ok: true,
+          dataUrl: message.mediaUrl,
+          fileName: message.fileName || "arquivo",
+          mimeType: message.mimeType || "application/octet-stream",
+        });
+        return;
+      }
+
+      if (!message.rawMessage) {
+        jsonResponse(response, 400, { error: "A Evolution nao retornou dados suficientes para baixar este arquivo. Sincronize novamente." });
+        return;
+      }
+
+      const payload = await callEvolutionApi(database, `/chat/getBase64FromMediaMessage/${encodeURIComponent(instance)}`, {
+        method: "POST",
+        body: JSON.stringify({ message: message.rawMessage, convertToMp4: false }),
+      });
+      const base64 = payload?.base64 || payload?.data?.base64 || payload?.file?.base64 || payload?.media || "";
+      const mimeType = payload?.mimetype || payload?.mimeType || payload?.data?.mimetype || message.mimeType || "application/octet-stream";
+      const fileName = payload?.fileName || payload?.filename || message.fileName || `arquivo-${messageId}`;
+
+      if (!base64) {
+        jsonResponse(response, 400, { error: "Nao foi possivel obter o arquivo na Evolution." });
+        return;
+      }
+
+      const dataUrl = String(base64).startsWith("data:") ? base64 : `data:${mimeType};base64,${base64}`;
+      database.messages = (database.messages ?? []).map((item) =>
+        String(item.id) === messageId || String(item.evolutionMessageId) === messageId
+          ? { ...item, mediaUrl: dataUrl, mimeType, fileName }
+          : item,
+      );
+      await writeDatabase(database);
+
+      jsonResponse(response, 200, { ok: true, dataUrl, fileName, mimeType });
       return;
     }
 

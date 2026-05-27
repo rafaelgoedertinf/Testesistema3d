@@ -133,6 +133,12 @@ type WhatsAppStatus = {
   checkedAt?: string;
 };
 
+type SendQueueItem = {
+  localId: string;
+  endpoint: "/api/whatsapp/send-text" | "/api/whatsapp/send-media";
+  body: Record<string, unknown>;
+};
+
 type BootstrapData = {
   stages: string[];
   tags: string[];
@@ -388,6 +394,11 @@ function formatCurrency(value: number) {
   }).format(value);
 }
 
+function conversationMatches(a: Conversation, b: Conversation) {
+  const aIds = new Set([a.id, a.remoteJid, ...(a.aliases ?? [])].filter(Boolean));
+  return [b.id, b.remoteJid, ...(b.aliases ?? [])].filter(Boolean).some((id) => aIds.has(id));
+}
+
 function mergeClientMessages(serverMessages: Message[], currentMessages: Message[]) {
   const map = new Map<string | number, Message>();
 
@@ -438,6 +449,8 @@ function App() {
   const [isRecordingAudio, setIsRecordingAudio] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  const sendQueueRef = useRef<SendQueueItem[]>([]);
+  const isProcessingQueueRef = useRef(false);
   const [whatsAppSyncStatus, setWhatsAppSyncStatus] = useState("");
   const [whatsAppBusy, setWhatsAppBusy] = useState<"" | "sync" | "send">("");
   const [hasAutoSyncedWhatsApp, setHasAutoSyncedWhatsApp] = useState(false);
@@ -695,6 +708,40 @@ function App() {
     setNewTag("");
   }
 
+  async function processSendQueue() {
+    if (isProcessingQueueRef.current || !sessionToken) return;
+    const next = sendQueueRef.current.shift();
+    if (!next) return;
+
+    isProcessingQueueRef.current = true;
+    setWhatsAppBusy("send");
+
+    try {
+      const result = await apiRequest<{ ok: boolean; message: Message }>(next.endpoint, {
+        method: "POST",
+        token: sessionToken,
+        body: JSON.stringify(next.body),
+      });
+      setChatMessages((current) =>
+        current.map((message) => (message.id === next.localId ? { ...result.message, status: "sent" } : message)),
+      );
+    } catch (error) {
+      setChatMessages((current) =>
+        current.map((message) => (message.id === next.localId ? { ...message, status: "failed" } : message)),
+      );
+      setWhatsAppSyncStatus(error instanceof Error ? error.message : "Nao foi possivel enviar a mensagem.");
+    } finally {
+      isProcessingQueueRef.current = false;
+      setWhatsAppBusy(sendQueueRef.current.length ? "send" : "");
+      if (sendQueueRef.current.length) processSendQueue();
+    }
+  }
+
+  function enqueueSend(item: SendQueueItem) {
+    sendQueueRef.current.push(item);
+    processSendQueue();
+  }
+
   function applyLocalReadState(conversationsToUpdate: Conversation[]) {
     return conversationsToUpdate.map((conversation) => {
       const ids = [conversation.id, conversation.remoteJid, ...(conversation.aliases ?? [])].filter((id): id is string | number => id !== undefined && id !== "");
@@ -790,7 +837,7 @@ function App() {
       setConversationList(applyLocalReadState(result.conversations));
       setChatMessages((current) => mergeClientMessages(result.messages, current));
       setSelectedConversation((current) =>
-        result.conversations.find((conversation) => conversation.id === current.id) ?? result.conversations[0] ?? current,
+        result.conversations.find((conversation) => conversationMatches(conversation, current)) ?? current,
       );
       if (selectedConversation?.id) {
         const current = result.conversations.find((conversation) =>
@@ -816,9 +863,9 @@ function App() {
   async function sendWhatsAppText() {
     const text = messageDraft.trim();
     const remoteJid = selectedConversation.remoteJid ?? String(selectedConversation.id);
-    if (!text || !remoteJid || !sessionToken || whatsAppBusy === "send") return;
+    if (!text || !remoteJid || !sessionToken) return;
 
-    const localId = `pending-${Date.now()}`;
+    const localId = `pending-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const optimisticMessage: Message = {
       id: localId,
       conversationId: remoteJid,
@@ -834,33 +881,22 @@ function App() {
     setChatMessages((current) => [...current, optimisticMessage]);
     setConversationList((current) =>
       current.map((conversation) =>
-        (conversation.remoteJid ?? conversation.id) === remoteJid
+        conversationMatches(conversation, selectedConversation)
           ? { ...conversation, lastMessage: text, lastMessageAt: new Date().toISOString() }
           : conversation,
       ),
     );
     setMessageDraft("");
-    setWhatsAppBusy("send");
-
-    try {
-      const result = await apiRequest<{ ok: boolean; message: Message }>("/api/whatsapp/send-text", {
-        method: "POST",
-        token: sessionToken,
-        body: JSON.stringify({ remoteJid, conversationId: selectedConversation.id, text }),
-      });
-      setChatMessages((current) => current.map((message) => (message.id === localId ? { ...result.message, status: "sent" } : message)));
-      setWhatsAppSyncStatus("Mensagem enviada.");
-    } catch (error) {
-      setChatMessages((current) => current.map((message) => (message.id === localId ? { ...message, status: "failed" } : message)));
-      setWhatsAppSyncStatus(error instanceof Error ? error.message : "Nao foi possivel enviar a mensagem.");
-    } finally {
-      setWhatsAppBusy("");
-    }
+    enqueueSend({
+      localId,
+      endpoint: "/api/whatsapp/send-text",
+      body: { remoteJid, conversationId: selectedConversation.id, text },
+    });
   }
 
   async function sendWhatsAppMedia(file: File, mediaType: "audio" | "video" | "image" | "document") {
     const remoteJid = selectedConversation.remoteJid ?? String(selectedConversation.id);
-    if (!file || !remoteJid || !sessionToken || whatsAppBusy === "send") return;
+    if (!file || !remoteJid || !sessionToken) return;
 
     const data = await new Promise<string>((resolve, reject) => {
       const reader = new FileReader();
@@ -868,7 +904,7 @@ function App() {
       reader.onerror = reject;
       reader.readAsDataURL(file);
     });
-    const localId = `pending-media-${Date.now()}`;
+    const localId = `pending-media-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const optimisticMessage: Message = {
       id: localId,
       conversationId: remoteJid,
@@ -885,31 +921,27 @@ function App() {
     };
 
     setChatMessages((current) => [...current, optimisticMessage]);
+    setConversationList((current) =>
+      current.map((conversation) =>
+        conversationMatches(conversation, selectedConversation)
+          ? { ...conversation, lastMessage: optimisticMessage.body, lastMessageAt: new Date().toISOString() }
+          : conversation,
+      ),
+    );
     setMessageDraft("");
-    setWhatsAppBusy("send");
-
-    try {
-      const result = await apiRequest<{ ok: boolean; message: Message }>("/api/whatsapp/send-media", {
-        method: "POST",
-        token: sessionToken,
-        body: JSON.stringify({
-          remoteJid,
-          conversationId: selectedConversation.id,
-          data,
-          mimeType: file.type || "application/octet-stream",
-          fileName: file.name,
-          mediaType,
-          caption: optimisticMessage.body,
-        }),
-      });
-      setChatMessages((current) => current.map((message) => (message.id === localId ? { ...result.message, status: "sent" } : message)));
-      setWhatsAppSyncStatus("Arquivo enviado.");
-    } catch (error) {
-      setChatMessages((current) => current.map((message) => (message.id === localId ? { ...message, status: "failed" } : message)));
-      setWhatsAppSyncStatus(error instanceof Error ? error.message : "Nao foi possivel enviar o arquivo.");
-    } finally {
-      setWhatsAppBusy("");
-    }
+    enqueueSend({
+      localId,
+      endpoint: "/api/whatsapp/send-media",
+      body: {
+        remoteJid,
+        conversationId: selectedConversation.id,
+        data,
+        mimeType: file.type || "application/octet-stream",
+        fileName: file.name,
+        mediaType,
+        caption: optimisticMessage.body,
+      },
+    });
   }
 
   async function toggleAudioRecording() {
@@ -1532,6 +1564,23 @@ function WhatsAppView({
     setMessageDraft(messageDraft || selectedMessage.body);
   }
 
+  async function downloadMedia(message: Message) {
+    try {
+      const result = await apiRequest<{ ok: boolean; dataUrl: string; fileName: string; mimeType: string }>(
+        `/api/whatsapp/media/${encodeURIComponent(String(message.evolutionMessageId || message.id))}`,
+        { token: localStorage.getItem("atendedor-2-token") ?? "" },
+      );
+      const anchor = document.createElement("a");
+      anchor.href = result.dataUrl;
+      anchor.download = result.fileName || message.fileName || "arquivo";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+    } catch (error) {
+      setMessageDraft((error instanceof Error ? error.message : "Nao foi possivel baixar o arquivo."));
+    }
+  }
+
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [selectedRemoteJid, visibleMessages.length, visibleMessages[visibleMessages.length - 1]?.id]);
@@ -1599,7 +1648,7 @@ function WhatsAppView({
                 key={message.id}
                 onClick={() => setSelectedMessageId(message.id)}
               >
-                <MessageContent message={message} />
+                <MessageContent message={message} onDownloadMedia={downloadMedia} />
                 <small>{message.time}{message.status === "pending" ? " • enviando" : message.status === "failed" ? " • falhou" : ""}</small>
               </div>
             ))
@@ -1667,7 +1716,7 @@ function WhatsAppView({
 }
 
 
-function MessageContent({ message }: { message: Message }) {
+function MessageContent({ message, onDownloadMedia }: { message: Message; onDownloadMedia: (message: Message) => void }) {
   const isImage = message.mimeType?.startsWith("image/") || message.mediaUrl?.startsWith("data:image");
   const isVideo = message.kind === "video" || message.mimeType?.startsWith("video/");
   const isAudio = message.kind === "audio" || message.mimeType?.startsWith("audio/");
@@ -1688,13 +1737,16 @@ function MessageContent({ message }: { message: Message }) {
               {message.fileName || "Abrir arquivo"}
             </a>
           ) : (
-            <span className="message-file unavailable">
+            <button className="message-file unavailable" onClick={() => onDownloadMedia(message)}>
               <FileText size={18} />
-              {message.fileName || "Arquivo recebido"}
-            </span>
+              {message.fileName || "Baixar arquivo"}
+            </button>
           )
         )}
         {message.body && <span>{message.body}</span>}
+        {canOpenMedia && message.kind === "file" && (
+          <button className="message-download" onClick={() => onDownloadMedia(message)}>Baixar</button>
+        )}
       </span>
     );
   }
