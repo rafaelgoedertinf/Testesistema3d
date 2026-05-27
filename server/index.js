@@ -591,7 +591,8 @@ function createContactMap(contacts) {
   for (const contact of contacts ?? []) {
     const phone = getContactPhone(contact);
     const name = contact?.pushName || contact?.name || contact?.notify || contact?.verifiedName || "";
-    const info = { phone: phone ? `+${phone}` : "", number: phone, name };
+    const profilePicUrl = getProfilePicUrl(contact);
+    const info = { phone: phone ? `+${phone}` : "", number: phone, name, profilePicUrl };
 
     for (const jid of getContactRemoteJids(contact)) {
       map.set(jid, { ...(map.get(jid) ?? {}), ...info });
@@ -659,6 +660,9 @@ function getMessageBody(message) {
     content?.buttonsResponseMessage?.selectedDisplayText ||
     content?.listResponseMessage?.title ||
     content?.templateButtonReplyMessage?.selectedDisplayText ||
+    content?.interactiveMessage?.body?.text ||
+    content?.interactiveMessage?.nativeFlowMessage?.buttons?.[0]?.name ||
+    content?.documentMessage?.fileName ||
     content?.audioMessage?.caption ||
     (content?.audioMessage ? "Audio" : "") ||
     (content?.imageMessage ? "Imagem" : "") ||
@@ -696,6 +700,18 @@ function stripDataUrl(value) {
   return text.includes(",") && text.startsWith("data:") ? text.split(",").slice(1).join(",") : text;
 }
 
+function getProfilePicUrl(source, contactInfo = {}) {
+  return (
+    contactInfo.profilePicUrl ||
+    source?.profilePicUrl ||
+    source?.profilePictureUrl ||
+    source?.picture ||
+    source?.imgUrl ||
+    source?.contact?.profilePicUrl ||
+    ""
+  );
+}
+
 function normalizeConversation(chat, index = 0, contactMap = new Map()) {
   const remoteJid = normalizeRemoteJid(
     chat?.remoteJid || chat?.id || chat?.jid || chat?.key?.remoteJid || chat?.contact?.remoteJid || chat?.number,
@@ -704,6 +720,7 @@ function normalizeConversation(chat, index = 0, contactMap = new Map()) {
   const contactInfo = contactMap.get(remoteJid) ?? {};
   const phone = contactInfo.phone || formatPhone(chat?.number || chat?.phone || remoteJid);
   const name = contactInfo.name || getConversationName(chat, remoteJid);
+  const profilePicUrl = getProfilePicUrl(chat, contactInfo);
 
   return {
     id: remoteJid || `chat-${Date.now()}-${index}`,
@@ -711,6 +728,7 @@ function normalizeConversation(chat, index = 0, contactMap = new Map()) {
     name: name === phoneFromJid(remoteJid) && phone !== "WhatsApp" ? phone : name,
     phone,
     number: contactInfo.number || extractPhone(phone),
+    profilePicUrl,
     state: "--",
     status: chat?.presence || chat?.status || "sincronizado",
     lastMessage: getLastMessageText(chat),
@@ -815,6 +833,63 @@ async function sendEvolutionMedia(database, instance, remoteJid, phone, media) {
   throw new Error(`Nao foi possivel enviar midia pela Evolution. Tentativas: ${errors.join(" | ")}`);
 }
 
+function getConversationDedupeKey(conversation) {
+  const number = extractPhone(conversation.number || conversation.phone);
+  if (number && !String(conversation.remoteJid || "").endsWith("@lid")) return `phone:${number}`;
+  if (number && String(conversation.phone || "").length >= 13) return `phone:${number}`;
+  return `jid:${conversation.remoteJid || conversation.id}`;
+}
+
+function dedupeConversations(conversations) {
+  const map = new Map();
+  for (const conversation of conversations ?? []) {
+    const key = getConversationDedupeKey(conversation);
+    const current = map.get(key);
+    if (!current) {
+      map.set(key, conversation);
+      continue;
+    }
+
+    const currentTime = new Date(current.lastMessageAt ?? 0).getTime();
+    const nextTime = new Date(conversation.lastMessageAt ?? 0).getTime();
+    map.set(key, {
+      ...current,
+      ...conversation,
+      name: current.name && !current.name.startsWith("+") ? current.name : conversation.name,
+      phone: current.phone !== "WhatsApp" ? current.phone : conversation.phone,
+      profilePicUrl: current.profilePicUrl || conversation.profilePicUrl,
+      unread: Math.max(Number(current.unread ?? 0), Number(conversation.unread ?? 0)),
+      lastMessage: nextTime >= currentTime ? conversation.lastMessage : current.lastMessage,
+      lastMessageAt: nextTime >= currentTime ? conversation.lastMessageAt : current.lastMessageAt,
+    });
+  }
+  return Array.from(map.values());
+}
+
+async function sendEvolutionAudio(database, instance, remoteJid, phone, media) {
+  const candidates = getRecipientCandidates(remoteJid, phone);
+  const errors = [];
+
+  for (const number of candidates) {
+    try {
+      const payload = await callEvolutionApi(database, `/message/sendWhatsAppAudio/${encodeURIComponent(instance)}`, {
+        method: "POST",
+        body: JSON.stringify({
+          number,
+          audio: stripDataUrl(media.data),
+          delay: 800,
+          encoding: true,
+        }),
+      });
+      return { payload, number };
+    } catch (error) {
+      errors.push(`${number}: ${error.message}`);
+    }
+  }
+
+  return sendEvolutionMedia(database, instance, remoteJid, phone, { ...media, mediaType: "audio" });
+}
+
 async function syncWhatsAppHistory(database, options = {}) {
   const { instance } = getEvolutionConfig(database);
   await ensureEvolutionInstance(database);
@@ -869,7 +944,7 @@ async function syncWhatsAppHistory(database, options = {}) {
     (message) => message.source === "evolution" || message.remoteJid || message.conversationId,
   );
 
-  const mergedConversations = mergeByKey(existingEvolutionConversations, conversations, (item) => item.remoteJid || item.id);
+  const mergedConversations = dedupeConversations(mergeByKey(existingEvolutionConversations, conversations, (item) => item.remoteJid || item.id));
   const mergedMessages = mergeByKey(existingEvolutionMessages, importedMessages, (item) => item.evolutionMessageId || item.id);
 
   mergedMessages.sort((a, b) => Number(a.timestamp ?? 0) - Number(b.timestamp ?? 0));
@@ -1316,13 +1391,16 @@ async function routeRequest(request, response) {
         return;
       }
 
-      const { payload } = await sendEvolutionMedia(database, instance, remoteJid, conversation?.phone, {
+      const mediaPayload = {
         data: body.data,
         mimeType: body.mimeType,
         fileName: body.fileName,
         caption: body.caption,
         mediaType: body.mediaType,
-      });
+      };
+      const { payload } = body.mediaType === "audio"
+        ? await sendEvolutionAudio(database, instance, remoteJid, conversation?.phone, mediaPayload)
+        : await sendEvolutionMedia(database, instance, remoteJid, conversation?.phone, mediaPayload);
 
       const timestamp = Date.now();
       const message = {

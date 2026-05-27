@@ -58,6 +58,8 @@ type Conversation = {
   remoteJid?: string;
   name: string;
   phone: string;
+  number?: string;
+  profilePicUrl?: string;
   state: string;
   status: string;
   lastMessage: string;
@@ -436,6 +438,8 @@ function App() {
   const [whatsAppSyncStatus, setWhatsAppSyncStatus] = useState("");
   const [whatsAppBusy, setWhatsAppBusy] = useState<"" | "sync" | "send">("");
   const [hasAutoSyncedWhatsApp, setHasAutoSyncedWhatsApp] = useState(false);
+  const [isNewConversationOpen, setIsNewConversationOpen] = useState(false);
+  const [newConversationPhone, setNewConversationPhone] = useState("");
   const [agentSettings, setAgentSettings] = useState<AgentSettings>(initialAgentSettings);
   const [evolutionSettings, setEvolutionSettings] = useState<EvolutionSettings>(initialEvolutionSettings);
   const [settingsStatus, setSettingsStatus] = useState("");
@@ -686,6 +690,43 @@ function App() {
 
     setTags((current) => [...current, value]);
     setNewTag("");
+  }
+
+  function startNewConversation(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const digits = newConversationPhone.replace(/\D/g, "");
+    if (digits.length < 10) {
+      setWhatsAppSyncStatus("Informe um telefone valido com DDD.");
+      return;
+    }
+
+    const remoteJid = `${digits}@s.whatsapp.net`;
+    const existing = conversationList.find(
+      (conversation) => conversation.remoteJid === remoteJid || conversation.number === digits || conversation.phone.replace(/\D/g, "") === digits,
+    );
+
+    if (existing) {
+      setSelectedConversation(existing);
+    } else {
+      const conversation: Conversation = {
+        id: remoteJid,
+        remoteJid,
+        name: `+${digits}`,
+        phone: `+${digits}`,
+        number: digits,
+        state: "--",
+        status: "nova conversa",
+        lastMessage: "Nova conversa",
+        unread: 0,
+        score: 50,
+        channel: "WhatsApp",
+      };
+      setConversationList((current) => [conversation, ...current]);
+      setSelectedConversation(conversation);
+    }
+
+    setNewConversationPhone("");
+    setIsNewConversationOpen(false);
   }
 
   async function syncWhatsApp(silent = false) {
@@ -1157,6 +1198,11 @@ function App() {
             toggleAudioRecording={toggleAudioRecording}
             whatsAppSyncStatus={whatsAppSyncStatus}
             whatsAppBusy={whatsAppBusy}
+            isNewConversationOpen={isNewConversationOpen}
+            setIsNewConversationOpen={setIsNewConversationOpen}
+            newConversationPhone={newConversationPhone}
+            setNewConversationPhone={setNewConversationPhone}
+            startNewConversation={startNewConversation}
           />
         )}
         {activeView === "leads" && (
@@ -1370,6 +1416,11 @@ function WhatsAppView({
   toggleAudioRecording,
   whatsAppSyncStatus,
   whatsAppBusy,
+  isNewConversationOpen,
+  setIsNewConversationOpen,
+  newConversationPhone,
+  setNewConversationPhone,
+  startNewConversation,
 }: {
   conversations: Conversation[];
   messages: Message[];
@@ -1386,6 +1437,11 @@ function WhatsAppView({
   toggleAudioRecording: () => void;
   whatsAppSyncStatus: string;
   whatsAppBusy: "" | "sync" | "send";
+  isNewConversationOpen: boolean;
+  setIsNewConversationOpen: (value: boolean) => void;
+  newConversationPhone: string;
+  setNewConversationPhone: (value: string) => void;
+  startNewConversation: (event: FormEvent<HTMLFormElement>) => void;
 }) {
   const selectedRemoteJid = selectedConversation.remoteJid ?? selectedConversation.id;
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -1438,31 +1494,49 @@ function WhatsAppView({
       <aside className="conversation-list">
         <div className="list-header">
           <h2>Conversas</h2>
-          <button className="sync-button" onClick={syncWhatsApp} disabled={whatsAppBusy === "sync"} title="Sincronizar WhatsApp">
-            {whatsAppBusy === "sync" ? <Clock3 size={16} /> : <RefreshIcon />}
-            <span>{whatsAppBusy === "sync" ? "Sincronizando" : "Sincronizar"}</span>
-          </button>
+          <div className="list-actions">
+            <button className="sync-button" onClick={syncWhatsApp} disabled={whatsAppBusy === "sync"} title="Sincronizar WhatsApp">
+              {whatsAppBusy === "sync" ? <Clock3 size={16} /> : <RefreshIcon />}
+              <span>{whatsAppBusy === "sync" ? "Sincronizando" : "Sincronizar"}</span>
+            </button>
+            <button className="new-chat-button" onClick={() => setIsNewConversationOpen(true)} title="Nova conversa">
+              <Plus size={16} />
+            </button>
+          </div>
         </div>
         {whatsAppSyncStatus && <div className="sync-status">{whatsAppSyncStatus}</div>}
+        {isNewConversationOpen && (
+          <form className="new-conversation-form" onSubmit={startNewConversation}>
+            <input
+              value={newConversationPhone}
+              onChange={(event) => setNewConversationPhone(event.target.value)}
+              placeholder="Telefone com DDD"
+              autoFocus
+            />
+            <button type="submit">Iniciar</button>
+          </form>
+        )}
         {conversations.map((conversation) => (
           <button
             key={conversation.id}
             className={conversation.id === selectedConversation.id ? "conversation active" : "conversation"}
-            onClick={() => setSelectedConversation(conversation)}
+            onClick={() => {
+              setSelectedConversation({ ...conversation, unread: 0 });
+            }}
           >
-            <div className="avatar">{conversation.name.charAt(0)}</div>
+            <div className="avatar">{conversation.profilePicUrl ? <img src={conversation.profilePicUrl} alt={conversation.name} /> : (conversation.name || conversation.phone).charAt(0)}</div>
             <div>
               <strong>{conversation.name || conversation.phone}</strong>
               <span>{conversation.phone} • {conversation.lastMessage}</span>
             </div>
-            {conversation.unread > 0 && <b>{conversation.unread}</b>}
+            {conversation.unread > 0 && <b className="unread-dot">{conversation.unread}</b>}
           </button>
         ))}
       </aside>
 
       <article className="chat-panel">
         <header className="chat-header">
-          <div className="avatar large">{selectedConversation.name.charAt(0)}</div>
+          <div className="avatar large">{selectedConversation.profilePicUrl ? <img src={selectedConversation.profilePicUrl} alt={selectedConversation.name} /> : (selectedConversation.name || selectedConversation.phone).charAt(0)}</div>
           <div>
             <strong>{selectedConversation.name || selectedConversation.phone}</strong>
             <span>
