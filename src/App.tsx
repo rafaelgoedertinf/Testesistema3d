@@ -73,12 +73,34 @@ type Message = {
   kind?: "text" | "audio" | "video" | "file";
 };
 
+type AgentSettings = {
+  businessHours: string;
+  inactivityMinutes: number;
+  handoffScore: number;
+  followUpCadence: string[];
+  mainInstruction: string;
+  missions: string[];
+};
+
+type EvolutionSettings = {
+  baseUrl: string;
+  instance: string;
+  apiKey: string;
+  connected: boolean;
+  hasApiKey?: boolean;
+  apiKeyPreview?: string;
+  webhookPath: string;
+  lastSavedAt?: string;
+};
+
 type BootstrapData = {
   stages: string[];
   tags: string[];
   leads: Lead[];
   conversations: Conversation[];
   messages: Message[];
+  agentSettings: AgentSettings;
+  evolution: Omit<EvolutionSettings, "apiKey">;
 };
 
 type ApiStatus = "offline" | "online" | "local";
@@ -246,6 +268,25 @@ const missions = [
   "Executar follow-ups inteligentes sem parecer robo.",
 ];
 
+const initialAgentSettings: AgentSettings = {
+  businessHours: "Segunda a sexta, 08:00 as 20:00; sabado, 09:00 as 13:00",
+  inactivityMinutes: 25,
+  handoffScore: 80,
+  followUpCadence: ["1 hora", "24 horas", "3 dias", "7 dias"],
+  mainInstruction:
+    "Responda de forma humana, consultiva e objetiva. Colete nome, estado, objetivo, orcamento, prazo e objeções. Classifique cada lead de 0% a 100%.",
+  missions,
+};
+
+const initialEvolutionSettings: EvolutionSettings = {
+  baseUrl: "",
+  instance: "atendedor-20",
+  apiKey: "",
+  connected: false,
+  hasApiKey: false,
+  webhookPath: "/api/evolution/webhook",
+};
+
 const automationRules = [
   {
     title: "Horario de funcionamento",
@@ -334,6 +375,9 @@ function App() {
   const [newTag, setNewTag] = useState("");
   const [newLead, setNewLead] = useState({ name: "", state: "", phone: "" });
   const [messageDraft, setMessageDraft] = useState("");
+  const [agentSettings, setAgentSettings] = useState<AgentSettings>(initialAgentSettings);
+  const [evolutionSettings, setEvolutionSettings] = useState<EvolutionSettings>(initialEvolutionSettings);
+  const [settingsStatus, setSettingsStatus] = useState("");
 
   useEffect(() => {
     if (!isAuthenticated || !sessionToken) return;
@@ -348,6 +392,8 @@ function App() {
         setTags(data.tags);
         setConversationList(data.conversations);
         setChatMessages(data.messages);
+        setAgentSettings(data.agentSettings);
+        setEvolutionSettings({ ...initialEvolutionSettings, ...data.evolution, apiKey: "" });
         setSelectedConversation((current) =>
           data.conversations.find((conversation) => conversation.id === current.id) ?? data.conversations[0],
         );
@@ -530,6 +576,58 @@ function App() {
     setNewTag("");
   }
 
+  async function saveAgentSettings(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSettingsStatus("");
+
+    if (!sessionToken) {
+      setSettingsStatus("Configuracoes alteradas apenas nesta tela. Rode a API local para salvar no arquivo.");
+      return;
+    }
+
+    try {
+      const savedSettings = await apiRequest<AgentSettings>("/api/settings/agent", {
+        method: "PATCH",
+        token: sessionToken,
+        body: JSON.stringify(agentSettings),
+      });
+      setAgentSettings(savedSettings);
+      setApiStatus("online");
+      setSettingsStatus("Configuracoes do agente salvas com sucesso.");
+    } catch (error) {
+      setApiStatus("offline");
+      setSettingsStatus(error instanceof Error ? error.message : "Nao foi possivel salvar o agente.");
+    }
+  }
+
+  async function saveEvolutionSettings(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSettingsStatus("");
+
+    if (!sessionToken) {
+      setSettingsStatus("Rode a API local para salvar a conexao da Evolution API.");
+      return;
+    }
+
+    try {
+      const savedSettings = await apiRequest<Omit<EvolutionSettings, "apiKey">>("/api/settings/evolution", {
+        method: "PATCH",
+        token: sessionToken,
+        body: JSON.stringify({
+          baseUrl: evolutionSettings.baseUrl,
+          instance: evolutionSettings.instance,
+          apiKey: evolutionSettings.apiKey,
+        }),
+      });
+      setEvolutionSettings({ ...initialEvolutionSettings, ...savedSettings, apiKey: "" });
+      setApiStatus("online");
+      setSettingsStatus("Conexao da Evolution API salva. A chave ficou guardada somente no backend local.");
+    } catch (error) {
+      setApiStatus("offline");
+      setSettingsStatus(error instanceof Error ? error.message : "Nao foi possivel salvar a Evolution API.");
+    }
+  }
+
   if (!isAuthenticated) {
     return (
       <main className="login-shell">
@@ -679,6 +777,13 @@ function App() {
             newTag={newTag}
             setNewTag={setNewTag}
             addTag={addTag}
+            agentSettings={agentSettings}
+            setAgentSettings={setAgentSettings}
+            saveAgentSettings={saveAgentSettings}
+            evolutionSettings={evolutionSettings}
+            setEvolutionSettings={setEvolutionSettings}
+            saveEvolutionSettings={saveEvolutionSettings}
+            settingsStatus={settingsStatus}
           />
         )}
       </main>
@@ -1142,6 +1247,13 @@ function SettingsView({
   newTag,
   setNewTag,
   addTag,
+  agentSettings,
+  setAgentSettings,
+  saveAgentSettings,
+  evolutionSettings,
+  setEvolutionSettings,
+  saveEvolutionSettings,
+  settingsStatus,
 }: {
   stages: string[];
   tags: string[];
@@ -1151,30 +1263,137 @@ function SettingsView({
   newTag: string;
   setNewTag: (value: string) => void;
   addTag: (event: FormEvent<HTMLFormElement>) => void;
+  agentSettings: AgentSettings;
+  setAgentSettings: (settings: AgentSettings) => void;
+  saveAgentSettings: (event: FormEvent<HTMLFormElement>) => void;
+  evolutionSettings: EvolutionSettings;
+  setEvolutionSettings: (settings: EvolutionSettings) => void;
+  saveEvolutionSettings: (event: FormEvent<HTMLFormElement>) => void;
+  settingsStatus: string;
 }) {
+  const webhookUrl = `${API_BASE_URL}${evolutionSettings.webhookPath}`;
+  const followUpText = agentSettings.followUpCadence.join("\n");
+
   return (
     <section className="settings-grid">
+      {settingsStatus && <div className="settings-status">{settingsStatus}</div>}
+
       <article className="panel">
-        <div className="panel-heading">
-          <div>
-            <span className="eyebrow">WhatsApp</span>
-            <h2>Evolution API</h2>
+        <form onSubmit={saveEvolutionSettings}>
+          <div className="panel-heading">
+            <div>
+              <span className="eyebrow">WhatsApp</span>
+              <h2>Evolution API</h2>
+            </div>
+            <Phone />
           </div>
-          <Phone />
-        </div>
-        <label className="stacked-label">
-          URL do servidor
-          <input placeholder="https://sua-evolution-api.com" />
-        </label>
-        <label className="stacked-label">
-          Instancia
-          <input placeholder="atendedor-20" />
-        </label>
-        <label className="stacked-label">
-          API Key
-          <input type="password" placeholder="Cole a chave com seguranca no backend" />
-        </label>
-        <button className="primary-action full">Conectar / gerar QR Code</button>
+          <div className={evolutionSettings.connected ? "connection-status online" : "connection-status pending"}>
+            {evolutionSettings.connected ? "Configuracao salva" : "Aguardando dados da conexao"}
+          </div>
+          <label className="stacked-label">
+            URL do servidor Evolution
+            <input
+              value={evolutionSettings.baseUrl}
+              onChange={(event) => setEvolutionSettings({ ...evolutionSettings, baseUrl: event.target.value })}
+              placeholder="https://sua-evolution-api.com"
+            />
+          </label>
+          <label className="stacked-label">
+            Nome da instancia
+            <input
+              value={evolutionSettings.instance}
+              onChange={(event) => setEvolutionSettings({ ...evolutionSettings, instance: event.target.value })}
+              placeholder="atendedor-20"
+            />
+          </label>
+          <label className="stacked-label">
+            API Key
+            <input
+              value={evolutionSettings.apiKey}
+              onChange={(event) => setEvolutionSettings({ ...evolutionSettings, apiKey: event.target.value })}
+              type="password"
+              placeholder={
+                evolutionSettings.hasApiKey
+                  ? `Chave salva (${evolutionSettings.apiKeyPreview ?? "protegida"}) - digite outra para trocar`
+                  : "Cole a chave da Evolution API"
+              }
+            />
+          </label>
+          <label className="stacked-label">
+            Webhook para configurar na Evolution
+            <input readOnly value={webhookUrl} />
+          </label>
+          <button className="primary-action full" type="submit">
+            Salvar conexao
+          </button>
+        </form>
+      </article>
+
+      <article className="panel">
+        <form onSubmit={saveAgentSettings}>
+          <div className="panel-heading">
+            <div>
+              <span className="eyebrow">Agente IA</span>
+              <h2>Regras operacionais</h2>
+            </div>
+            <Bot />
+          </div>
+          <label className="stacked-label">
+            Instrucao principal
+            <textarea
+              value={agentSettings.mainInstruction}
+              onChange={(event) => setAgentSettings({ ...agentSettings, mainInstruction: event.target.value })}
+            />
+          </label>
+          <label className="stacked-label">
+            Horario de funcionamento
+            <input
+              value={agentSettings.businessHours}
+              onChange={(event) => setAgentSettings({ ...agentSettings, businessHours: event.target.value })}
+            />
+          </label>
+          <div className="settings-two-columns">
+            <label className="stacked-label">
+              Inatividade (min)
+              <input
+                value={agentSettings.inactivityMinutes}
+                min={1}
+                type="number"
+                onChange={(event) =>
+                  setAgentSettings({ ...agentSettings, inactivityMinutes: Number(event.target.value) })
+                }
+              />
+            </label>
+            <label className="stacked-label">
+              Passar para humano em (%)
+              <input
+                value={agentSettings.handoffScore}
+                min={0}
+                max={100}
+                type="number"
+                onChange={(event) => setAgentSettings({ ...agentSettings, handoffScore: Number(event.target.value) })}
+              />
+            </label>
+          </div>
+          <label className="stacked-label">
+            Cadencia de follow-up (uma regra por linha)
+            <textarea
+              value={followUpText}
+              onChange={(event) =>
+                setAgentSettings({
+                  ...agentSettings,
+                  followUpCadence: event.target.value
+                    .split("\n")
+                    .map((item) => item.trim())
+                    .filter(Boolean),
+                })
+              }
+            />
+          </label>
+          <button className="primary-action full" type="submit">
+            Salvar agente
+          </button>
+        </form>
       </article>
 
       <article className="panel">
@@ -1215,26 +1434,26 @@ function SettingsView({
         </div>
       </article>
 
-      <article className="panel">
+      <article className="panel wide">
         <div className="panel-heading">
           <div>
-            <span className="eyebrow">Hospedagem</span>
-            <h2>Plano barato para 24/7</h2>
+            <span className="eyebrow">Futuro comercial</span>
+            <h2>Pronto para virar produto</h2>
           </div>
           <Sparkles />
         </div>
         <div className="rule-list">
           <div>
-            <strong>Frontend</strong>
-            <span>Vercel ou Netlify no plano gratuito.</span>
+            <strong>Agora</strong>
+            <span>Voce configura a Evolution API e as regras do agente direto nesta tela.</span>
           </div>
           <div>
-            <strong>Banco</strong>
-            <span>Supabase ou Neon Postgres no plano gratuito.</span>
+            <strong>Quando vender</strong>
+            <span>Trocaremos o arquivo local por banco online, criaremos empresas/usuarios e criptografia das chaves.</span>
           </div>
           <div>
-            <strong>Backend 24/7</strong>
-            <span>Render/Fly/Railway barato, ou VPS pequena com Docker.</span>
+            <strong>Hospedagem 24/7</strong>
+            <span>Frontend em Vercel/Netlify, API em Render/Fly/Railway ou VPS pequena, banco Supabase/Neon.</span>
           </div>
         </div>
       </article>

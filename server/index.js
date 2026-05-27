@@ -169,8 +169,10 @@ const defaultDatabase = {
   evolution: {
     baseUrl: "",
     instance: "atendedor-20",
+    apiKey: "",
     connected: false,
     webhookPath: "/api/evolution/webhook",
+    lastSavedAt: "",
   },
 };
 
@@ -240,9 +242,22 @@ function requireAuth(request, response) {
   return false;
 }
 
+function sanitizeEvolution(evolution = {}) {
+  const apiKey = String(evolution.apiKey ?? "");
+  return {
+    baseUrl: String(evolution.baseUrl ?? ""),
+    instance: String(evolution.instance ?? "atendedor-20"),
+    connected: Boolean(evolution.connected),
+    webhookPath: String(evolution.webhookPath ?? "/api/evolution/webhook"),
+    lastSavedAt: String(evolution.lastSavedAt ?? ""),
+    hasApiKey: Boolean(apiKey),
+    apiKeyPreview: apiKey ? `termina em ${apiKey.slice(-4)}` : "",
+  };
+}
+
 function publicDatabase(database) {
   const { users: _users, ...safeDatabase } = database;
-  return safeDatabase;
+  return { ...safeDatabase, evolution: sanitizeEvolution(database.evolution) };
 }
 
 function getTemperature(score) {
@@ -379,7 +394,17 @@ async function routeRequest(request, response) {
     if (request.method === "PATCH" && url.pathname === "/api/settings/agent") {
       const body = await readJsonBody(request);
       const database = await ensureDatabase();
-      database.agentSettings = { ...database.agentSettings, ...body };
+      database.agentSettings = {
+        ...database.agentSettings,
+        businessHours: String(body.businessHours ?? database.agentSettings.businessHours),
+        inactivityMinutes: Number(body.inactivityMinutes ?? database.agentSettings.inactivityMinutes),
+        handoffScore: Number(body.handoffScore ?? database.agentSettings.handoffScore),
+        followUpCadence: Array.isArray(body.followUpCadence)
+          ? body.followUpCadence.map(String).filter(Boolean)
+          : database.agentSettings.followUpCadence,
+        mainInstruction: String(body.mainInstruction ?? database.agentSettings.mainInstruction),
+        missions: Array.isArray(body.missions) ? body.missions.map(String).filter(Boolean) : database.agentSettings.missions,
+      };
       await writeDatabase(database);
       jsonResponse(response, 200, database.agentSettings);
       return;
@@ -388,14 +413,22 @@ async function routeRequest(request, response) {
     if (request.method === "PATCH" && url.pathname === "/api/settings/evolution") {
       const body = await readJsonBody(request);
       const database = await ensureDatabase();
+      const currentEvolution = database.evolution ?? defaultDatabase.evolution;
+      const baseUrl = String(body.baseUrl ?? currentEvolution.baseUrl).trim().replace(/\/$/, "");
+      const instance = String(body.instance ?? currentEvolution.instance).trim();
+      const apiKey = String(body.apiKey ?? "").trim();
+
       database.evolution = {
-        ...database.evolution,
-        baseUrl: String(body.baseUrl ?? database.evolution.baseUrl),
-        instance: String(body.instance ?? database.evolution.instance),
-        connected: Boolean(body.baseUrl ?? database.evolution.baseUrl),
+        ...currentEvolution,
+        baseUrl,
+        instance,
+        apiKey: apiKey || currentEvolution.apiKey || "",
+        connected: Boolean(baseUrl && instance && (apiKey || currentEvolution.apiKey)),
+        webhookPath: currentEvolution.webhookPath ?? "/api/evolution/webhook",
+        lastSavedAt: new Date().toISOString(),
       };
       await writeDatabase(database);
-      jsonResponse(response, 200, database.evolution);
+      jsonResponse(response, 200, sanitizeEvolution(database.evolution));
       return;
     }
 

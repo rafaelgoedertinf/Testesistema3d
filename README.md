@@ -28,6 +28,53 @@ Quando estiver no seu computador Windows ou Mac, o fluxo ideal sera:
 
 Eu posso seguir fazendo as partes tecnicas no repositorio. Quando precisar de algo no seu computador, eu vou te passar passos objetivos do tipo "clique aqui", "cole este comando" ou "me envie essa tela".
 
+
+## Como abrir no seu computador
+
+### Windows
+
+1. Instale o **Node.js LTS** em https://nodejs.org.
+2. Instale o **GitHub Desktop** em https://desktop.github.com.
+3. No GitHub Desktop, use **File > Clone repository** e baixe este projeto.
+4. Abra a pasta do projeto no Cursor ou VS Code.
+5. Abra o terminal dentro da pasta e cole:
+
+```bash
+npm install
+npm run dev
+```
+
+6. Abra no navegador o endereco que aparecer, normalmente **http://localhost:5173**.
+
+### Mac
+
+1. Instale o **Node.js LTS** em https://nodejs.org.
+2. Instale o **GitHub Desktop** em https://desktop.github.com.
+3. Clone este projeto pelo GitHub Desktop.
+4. Abra a pasta no Cursor ou VS Code.
+5. No terminal da pasta, rode:
+
+```bash
+npm install
+npm run dev
+```
+
+6. Abra **http://localhost:5173** no navegador.
+
+## Onde configurar a Evolution API
+
+Depois de entrar no sistema:
+
+1. Clique em **Configuracoes** no menu lateral.
+2. No bloco **Evolution API**, preencha:
+   - URL do servidor Evolution.
+   - Nome da instancia.
+   - API Key.
+3. Copie o campo **Webhook para configurar na Evolution** e use no painel da Evolution API.
+4. Clique em **Salvar conexao**.
+
+A API Key fica guardada no backend local e a tela mostra apenas que existe uma chave salva. Para comercializar, o proximo passo sera criptografar chaves e separar dados por empresa/cliente.
+
 ## Como rodar localmente
 
 ```bash

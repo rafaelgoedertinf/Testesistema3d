@@ -978,6 +978,54 @@ textarea:focus {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.settings-status {
+  grid-column: 1 / -1;
+  padding: 0.9rem 1rem;
+  color: #ccfbf1;
+  border: 1px solid rgba(45, 212, 191, 0.28);
+  border-radius: 18px;
+  background: rgba(45, 212, 191, 0.1);
+  font-weight: 800;
+}
+
+.connection-status {
+  width: fit-content;
+  padding: 0.45rem 0.65rem;
+  margin-bottom: 1rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 900;
+}
+
+.connection-status.online {
+  color: #bbf7d0;
+  background: rgba(34, 197, 94, 0.14);
+}
+
+.connection-status.pending {
+  color: #fde68a;
+  background: rgba(251, 191, 36, 0.14);
+}
+
+.settings-two-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.8rem;
+}
+
+.settings-grid textarea {
+  width: 100%;
+  min-height: 120px;
+  padding: 0.9rem 1rem;
+  resize: vertical;
+  line-height: 1.6;
+}
+
+.settings-grid input[readonly] {
+  color: #bae6fd;
+  background: rgba(56, 189, 248, 0.08);
+}
+
 .stacked-label {
   margin-bottom: 0.8rem;
 }
