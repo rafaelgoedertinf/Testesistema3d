@@ -93,6 +93,22 @@ type EvolutionSettings = {
   lastSavedAt?: string;
 };
 
+type EvolutionTestResult = {
+  ok: boolean;
+  instance: string;
+  state: string;
+  connected: boolean;
+};
+
+type EvolutionQrCodeResult = {
+  ok: boolean;
+  instance: string;
+  qrCode: {
+    image: string;
+    code: string;
+  };
+};
+
 type BootstrapData = {
   stages: string[];
   tags: string[];
@@ -379,6 +395,9 @@ function App() {
   const [agentSettings, setAgentSettings] = useState<AgentSettings>(initialAgentSettings);
   const [evolutionSettings, setEvolutionSettings] = useState<EvolutionSettings>(initialEvolutionSettings);
   const [settingsStatus, setSettingsStatus] = useState("");
+  const [evolutionActionStatus, setEvolutionActionStatus] = useState("");
+  const [evolutionQrCode, setEvolutionQrCode] = useState<EvolutionQrCodeResult["qrCode"] | null>(null);
+  const [evolutionBusy, setEvolutionBusy] = useState<"" | "test" | "qrcode">("");
 
   useEffect(() => {
     if (!isAuthenticated || !sessionToken) return;
@@ -641,6 +660,63 @@ function App() {
     }
   }
 
+  async function testEvolutionConnection() {
+    setEvolutionActionStatus("");
+    setEvolutionQrCode(null);
+
+    if (!sessionToken) {
+      setEvolutionActionStatus("Entre novamente para testar a Evolution API.");
+      return;
+    }
+
+    setEvolutionBusy("test");
+    try {
+      const result = await apiRequest<EvolutionTestResult>("/api/evolution/test", {
+        method: "POST",
+        token: sessionToken,
+      });
+      setApiStatus("online");
+      setEvolutionActionStatus(
+        result.connected
+          ? `Conexao OK. Instancia ${result.instance} esta conectada (${result.state}).`
+          : `API respondeu. Estado atual da instancia ${result.instance}: ${result.state}.`,
+      );
+    } catch (error) {
+      setEvolutionActionStatus(error instanceof Error ? error.message : "Nao foi possivel testar a Evolution API.");
+    } finally {
+      setEvolutionBusy("");
+    }
+  }
+
+  async function generateEvolutionQrCode() {
+    setEvolutionActionStatus("");
+    setEvolutionQrCode(null);
+
+    if (!sessionToken) {
+      setEvolutionActionStatus("Entre novamente para gerar o QR Code.");
+      return;
+    }
+
+    setEvolutionBusy("qrcode");
+    try {
+      const result = await apiRequest<EvolutionQrCodeResult>("/api/evolution/qrcode", {
+        method: "POST",
+        token: sessionToken,
+      });
+      setApiStatus("online");
+      setEvolutionQrCode(result.qrCode);
+      setEvolutionActionStatus(
+        result.qrCode.image || result.qrCode.code
+          ? "QR Code gerado. Escaneie com o WhatsApp no celular."
+          : "A Evolution respondeu, mas nao retornou um QR Code reconhecido.",
+      );
+    } catch (error) {
+      setEvolutionActionStatus(error instanceof Error ? error.message : "Nao foi possivel gerar o QR Code.");
+    } finally {
+      setEvolutionBusy("");
+    }
+  }
+
   if (!isAuthenticated) {
     return (
       <main className="login-shell">
@@ -810,6 +886,11 @@ function App() {
             setEvolutionSettings={setEvolutionSettings}
             saveEvolutionSettings={saveEvolutionSettings}
             settingsStatus={settingsStatus}
+            evolutionActionStatus={evolutionActionStatus}
+            evolutionQrCode={evolutionQrCode}
+            evolutionBusy={evolutionBusy}
+            testEvolutionConnection={testEvolutionConnection}
+            generateEvolutionQrCode={generateEvolutionQrCode}
           />
         )}
       </main>
@@ -1280,6 +1361,11 @@ function SettingsView({
   setEvolutionSettings,
   saveEvolutionSettings,
   settingsStatus,
+  evolutionActionStatus,
+  evolutionQrCode,
+  evolutionBusy,
+  testEvolutionConnection,
+  generateEvolutionQrCode,
 }: {
   stages: string[];
   tags: string[];
@@ -1296,9 +1382,14 @@ function SettingsView({
   setEvolutionSettings: (settings: EvolutionSettings) => void;
   saveEvolutionSettings: (event: FormEvent<HTMLFormElement>) => void;
   settingsStatus: string;
+  evolutionActionStatus: string;
+  evolutionQrCode: EvolutionQrCodeResult["qrCode"] | null;
+  evolutionBusy: "" | "test" | "qrcode";
+  testEvolutionConnection: () => void;
+  generateEvolutionQrCode: () => void;
 }) {
   const publicBaseUrl = API_BASE_URL || window.location.origin;
-  const webhookUrl = `${publicBaseUrl}${evolutionSettings.webhookPath}`;
+  const apiIntegrationUrl = `${publicBaseUrl}/api/evolution`;
   const followUpText = agentSettings.followUpCadence.join("\n");
 
   return (
@@ -1347,12 +1438,44 @@ function SettingsView({
             />
           </label>
           <label className="stacked-label">
-            Webhook para configurar na Evolution
-            <input readOnly value={webhookUrl} />
+            Endpoint da API interna
+            <input readOnly value={apiIntegrationUrl} />
           </label>
+          <p className="settings-help">
+            O Atendedor usa essa API interna para chamar a Evolution pelo backend, mantendo sua API key fora do navegador.
+          </p>
           <button className="primary-action full" type="submit">
             Salvar conexao
           </button>
+          <div className="evolution-actions">
+            <button
+              className="secondary-action full"
+              type="button"
+              onClick={testEvolutionConnection}
+              disabled={evolutionBusy !== ""}
+            >
+              {evolutionBusy === "test" ? "Testando..." : "Testar conexao"}
+            </button>
+            <button
+              className="secondary-action full"
+              type="button"
+              onClick={generateEvolutionQrCode}
+              disabled={evolutionBusy !== ""}
+            >
+              {evolutionBusy === "qrcode" ? "Gerando..." : "Gerar QR Code"}
+            </button>
+          </div>
+          {evolutionActionStatus && <div className="settings-status compact">{evolutionActionStatus}</div>}
+          {evolutionQrCode && (
+            <div className="qr-code-panel">
+              {evolutionQrCode.image ? (
+                <img src={evolutionQrCode.image} alt="QR Code para conectar WhatsApp" />
+              ) : (
+                <strong>{evolutionQrCode.code || "QR Code recebido sem imagem."}</strong>
+              )}
+              <span>Abra o WhatsApp no celular, va em aparelhos conectados e escaneie este codigo.</span>
+            </div>
+          )}
         </form>
       </article>
 

@@ -11,7 +11,7 @@ MVP inicial de um robo de IA personalizavel para atender WhatsApp, qualificar le
 - Dashboard com pipeline, temperatura dos leads e follow-ups.
 - Configuracoes do agente de IA: cultura, base de conhecimento, metodologia, missoes, horario de atendimento, follow-up e inatividade.
 - Tela de configuracao para Evolution API.
-- API local Node.js com login, dados persistentes e rotas para leads, etapas, etiquetas, agente e webhook.
+- API Node.js com login, dados persistentes, Evolution API, leads, etapas, etiquetas e agente.
 - Visual moderno responsivo para desktop e notebook.
 
 > Este primeiro passo ja roda localmente com frontend + API. Os dados de teste ficam em `data/atendedor-db.json`, que nao vai para o GitHub. Para producao, o proximo passo e trocar esse arquivo por Postgres/Supabase.
@@ -110,7 +110,9 @@ O comando `npm run dev` sobe duas coisas ao mesmo tempo:
 - `POST /api/tags`: cria uma etiqueta.
 - `PATCH /api/settings/agent`: salva configuracoes do agente.
 - `PATCH /api/settings/evolution`: salva configuracoes da Evolution API.
-- `POST /api/evolution/webhook`: recebe eventos da Evolution API.
+- `POST /api/evolution/test`: testa a conexao com a Evolution API.
+- `POST /api/evolution/qrcode`: gera QR Code para conectar o WhatsApp.
+- `POST /api/evolution/webhook`: rota opcional para eventos futuros da Evolution API.
 
 
 ## Publicar online para testar

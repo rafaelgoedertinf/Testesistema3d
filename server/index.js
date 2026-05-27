@@ -334,6 +334,81 @@ function getTemperature(score) {
   return "Frio";
 }
 
+function getEvolutionConfig(database) {
+  const evolution = database.evolution ?? defaultDatabase.evolution;
+  const baseUrl = String(evolution.baseUrl ?? "").trim().replace(/\/$/, "");
+  const instance = String(evolution.instance ?? "").trim();
+  const apiKey = String(evolution.apiKey ?? "").trim();
+
+  if (!baseUrl || !instance || !apiKey) {
+    throw new Error("Configure URL, instancia e API key da Evolution API antes de testar.");
+  }
+
+  return { baseUrl, instance, apiKey };
+}
+
+async function callEvolutionApi(database, path, options = {}) {
+  const { baseUrl, apiKey } = getEvolutionConfig(database);
+  let response;
+  try {
+    response = await fetch(`${baseUrl}${path}`, {
+      ...options,
+      headers: {
+        apikey: apiKey,
+        "Content-Type": "application/json",
+        ...(options.headers ?? {}),
+      },
+    });
+  } catch (error) {
+    const message = error?.cause?.code
+      ? `Nao foi possivel conectar a Evolution API (${error.cause.code}). Confira URL e firewall do servidor.`
+      : "Nao foi possivel conectar a Evolution API. Confira a URL do servidor.";
+    throw new Error(message);
+  }
+
+  const text = await response.text();
+  let payload = text;
+  try {
+    payload = text ? JSON.parse(text) : {};
+  } catch {
+    payload = { raw: text };
+  }
+
+  if (!response.ok) {
+    const error = new Error(`Evolution API retornou ${response.status}`);
+    error.status = response.status;
+    error.payload = payload;
+    throw error;
+  }
+
+  return payload;
+}
+
+function extractQrCode(payload) {
+  const candidates = [
+    payload?.base64,
+    payload?.qrcode?.base64,
+    payload?.qrcode,
+    payload?.qr,
+    payload?.code,
+    payload?.pairingCode,
+    payload?.data?.base64,
+    payload?.data?.qrcode?.base64,
+    payload?.data?.qrcode,
+    payload?.data?.qr,
+    payload?.data?.code,
+    payload?.data?.pairingCode,
+  ].filter(Boolean);
+
+  const image = candidates.find((value) => typeof value === "string" && value.startsWith("data:image"));
+  const base64 = candidates.find(
+    (value) => typeof value === "string" && /^[A-Za-z0-9+/=]+$/.test(value) && value.length > 120,
+  );
+  const code = candidates.find((value) => typeof value === "string" && value.length <= 120);
+
+  return { image: image ?? (base64 ? `data:image/png;base64,${base64}` : ""), code: code ?? "" };
+}
+
 const contentTypes = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
@@ -564,6 +639,44 @@ async function routeRequest(request, response) {
       return;
     }
 
+    if (request.method === "POST" && url.pathname === "/api/evolution/test") {
+      const database = await ensureDatabase();
+      const { instance } = getEvolutionConfig(database);
+      const payload = await callEvolutionApi(database, `/instance/connectionState/${encodeURIComponent(instance)}`);
+      const state = payload?.instance?.state ?? payload?.state ?? payload?.connectionStatus ?? payload?.status ?? "desconhecido";
+
+      database.evolution = {
+        ...(database.evolution ?? defaultDatabase.evolution),
+        lastTestAt: new Date().toISOString(),
+        lastConnectionState: state,
+      };
+      await writeDatabase(database);
+
+      jsonResponse(response, 200, {
+        ok: true,
+        instance,
+        state,
+        connected: ["open", "connected", "online"].includes(String(state).toLowerCase()),
+      });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/evolution/qrcode") {
+      const database = await ensureDatabase();
+      const { instance } = getEvolutionConfig(database);
+      const payload = await callEvolutionApi(database, `/instance/connect/${encodeURIComponent(instance)}`);
+      const qrCode = extractQrCode(payload);
+
+      database.evolution = {
+        ...(database.evolution ?? defaultDatabase.evolution),
+        lastQrCodeAt: new Date().toISOString(),
+      };
+      await writeDatabase(database);
+
+      jsonResponse(response, 200, { ok: true, instance, qrCode });
+      return;
+    }
+
     if (request.method === "POST" && url.pathname === "/api/evolution/webhook") {
       const body = await readJsonBody(request);
       const database = await ensureDatabase();
@@ -581,7 +694,14 @@ async function routeRequest(request, response) {
     await serveStatic(url.pathname, response);
   } catch (error) {
     console.error(error);
-    jsonResponse(response, 500, { error: "Erro interno da API local." });
+    const message = error instanceof Error ? error.message : "Erro interno da API local.";
+    const isExpectedIntegrationError =
+      message.startsWith("Configure URL") ||
+      message.startsWith("Evolution API retornou") ||
+      message.startsWith("Nao foi possivel conectar a Evolution API");
+    jsonResponse(response, isExpectedIntegrationError ? 400 : 500, {
+      error: isExpectedIntegrationError ? message : "Erro interno da API local.",
+    });
   }
 }
 
