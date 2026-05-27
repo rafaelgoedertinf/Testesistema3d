@@ -112,6 +112,17 @@ O comando `npm run dev` sobe duas coisas ao mesmo tempo:
 - `PATCH /api/settings/evolution`: salva configuracoes da Evolution API.
 - `POST /api/evolution/webhook`: recebe eventos da Evolution API.
 
+
+## Publicar online para testar
+
+Minha recomendacao inicial e:
+
+- **Render** para hospedar o app e a API no mesmo endereco.
+- **Supabase Postgres** para guardar os dados online.
+- **Registro.br** para apontar seu subdominio via CNAME.
+
+O passo a passo completo esta no arquivo [DEPLOYMENT.md](./DEPLOYMENT.md).
+
 ## Proxima arquitetura recomendada
 
 Para transformar o MVP em um produto 24/7 barato:

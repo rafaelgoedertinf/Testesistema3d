@@ -105,7 +105,7 @@ type BootstrapData = {
 
 type ApiStatus = "offline" | "online" | "local";
 
-const API_BASE_URL = import.meta.env.VITE_API_URL ?? "http://localhost:3333";
+const API_BASE_URL = import.meta.env.VITE_API_URL ?? (import.meta.env.PROD ? "" : "http://localhost:3333");
 const SEEDED_USER_EMAIL = "rafael-goedert@hotmail.com";
 const SEEDED_PASSWORD_HASH =
   "f2f3585187d6d62f77b9dac07fd2755c72dcb9bee427216982cb605cf9f5a9bf";
@@ -1271,7 +1271,8 @@ function SettingsView({
   saveEvolutionSettings: (event: FormEvent<HTMLFormElement>) => void;
   settingsStatus: string;
 }) {
-  const webhookUrl = `${API_BASE_URL}${evolutionSettings.webhookPath}`;
+  const publicBaseUrl = API_BASE_URL || window.location.origin;
+  const webhookUrl = `${publicBaseUrl}${evolutionSettings.webhookPath}`;
   const followUpText = agentSettings.followUpCadence.join("\n");
 
   return (

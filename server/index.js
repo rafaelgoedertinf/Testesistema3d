@@ -1,14 +1,24 @@
 import { createHmac, createHash, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import pg from "pg";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = resolve(__dirname, "..");
 const dbPath = resolve(rootDir, "data", "atendedor-db.json");
+const distDir = resolve(rootDir, "dist");
 const port = Number(process.env.PORT ?? 3333);
 const sessionSecret = process.env.SESSION_SECRET ?? "atendedor-2-local-dev-secret";
+const databaseUrl = process.env.DATABASE_URL;
+const { Pool } = pg;
+const pgPool = databaseUrl
+  ? new Pool({
+      connectionString: databaseUrl,
+      ssl: process.env.POSTGRES_SSL === "false" ? false : { rejectUnauthorized: false },
+    })
+  : null;
 
 const SEEDED_USER = {
   id: "usr_rafael",
@@ -193,7 +203,27 @@ async function readJsonBody(request) {
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
 
+async function ensurePostgresState() {
+  if (!pgPool) return null;
+
+  await pgPool.query(
+    "CREATE TABLE IF NOT EXISTS app_state (id text PRIMARY KEY, data jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now())",
+  );
+
+  const result = await pgPool.query("SELECT data FROM app_state WHERE id = $1", ["default"]);
+  if (result.rowCount) return result.rows[0].data;
+
+  const seed = structuredClone(defaultDatabase);
+  await pgPool.query("INSERT INTO app_state (id, data) VALUES ($1, $2::jsonb)", [
+    "default",
+    JSON.stringify(seed),
+  ]);
+  return seed;
+}
+
 async function ensureDatabase() {
+  if (pgPool) return ensurePostgresState();
+
   await mkdir(dirname(dbPath), { recursive: true });
   try {
     return JSON.parse(await readFile(dbPath, "utf8"));
@@ -205,6 +235,14 @@ async function ensureDatabase() {
 }
 
 async function writeDatabase(database) {
+  if (pgPool) {
+    await pgPool.query(
+      "INSERT INTO app_state (id, data, updated_at) VALUES ($1, $2::jsonb, now()) ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, updated_at = now()",
+      ["default", JSON.stringify(database)],
+    );
+    return;
+  }
+
   await mkdir(dirname(dbPath), { recursive: true });
   await writeFile(dbPath, `${JSON.stringify(database, null, 2)}\n`);
 }
@@ -266,6 +304,47 @@ function getTemperature(score) {
   return "Frio";
 }
 
+const contentTypes = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".ico": "image/x-icon",
+};
+
+async function serveStatic(requestPath, response) {
+  const normalizedPath = requestPath === "/" ? "/index.html" : requestPath;
+  const safePath = normalizedPath.replace(/^\/+/, "");
+  const filePath = resolve(distDir, safePath);
+
+  if (!filePath.startsWith(distDir)) {
+    jsonResponse(response, 403, { error: "Acesso negado." });
+    return;
+  }
+
+  try {
+    const file = await readFile(filePath);
+    response.writeHead(200, {
+      "Content-Type": contentTypes[extname(filePath)] ?? "application/octet-stream",
+    });
+    response.end(file);
+  } catch {
+    try {
+      const indexFile = await readFile(join(distDir, "index.html"));
+      response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      response.end(indexFile);
+    } catch {
+      response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+      response.end("Build do frontend nao encontrada. Rode npm run build.");
+    }
+  }
+}
+
 async function routeRequest(request, response) {
   if (request.method === "OPTIONS") {
     jsonResponse(response, 204, {});
@@ -296,6 +375,11 @@ async function routeRequest(request, response) {
         token: signToken(user),
         user: { id: user.id, name: user.name, email: user.email, role: user.role },
       });
+      return;
+    }
+
+    if (!url.pathname.startsWith("/api")) {
+      await serveStatic(url.pathname, response);
       return;
     }
 
@@ -441,7 +525,12 @@ async function routeRequest(request, response) {
       return;
     }
 
-    jsonResponse(response, 404, { error: "Rota nao encontrada." });
+    if (url.pathname.startsWith("/api")) {
+      jsonResponse(response, 404, { error: "Rota nao encontrada." });
+      return;
+    }
+
+    await serveStatic(url.pathname, response);
   } catch (error) {
     console.error(error);
     jsonResponse(response, 500, { error: "Erro interno da API local." });
@@ -449,5 +538,6 @@ async function routeRequest(request, response) {
 }
 
 createServer(routeRequest).listen(port, () => {
-  console.log(`Atendedor 2.0 API rodando em http://localhost:${port}`);
+  console.log(`Atendedor 2.0 rodando em http://localhost:${port}`);
+  console.log(pgPool ? "Persistencia online: Postgres" : "Persistencia local: data/atendedor-db.json");
 });
