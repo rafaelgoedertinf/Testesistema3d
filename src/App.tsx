@@ -1,4 +1,4 @@
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   Activity,
   BarChart3,
@@ -73,6 +73,17 @@ type Message = {
   kind?: "text" | "audio" | "video" | "file";
 };
 
+type BootstrapData = {
+  stages: string[];
+  tags: string[];
+  leads: Lead[];
+  conversations: Conversation[];
+  messages: Message[];
+};
+
+type ApiStatus = "offline" | "online" | "local";
+
+const API_BASE_URL = import.meta.env.VITE_API_URL ?? "http://localhost:3333";
 const SEEDED_USER_EMAIL = "rafael-goedert@hotmail.com";
 const SEEDED_PASSWORD_HASH =
   "f2f3585187d6d62f77b9dac07fd2755c72dcb9bee427216982cb605cf9f5a9bf";
@@ -262,6 +273,25 @@ const navigation: Array<{ id: View; label: string; icon: LucideIcon }> = [
   { id: "settings", label: "Configuracoes", icon: Settings },
 ];
 
+async function apiRequest<T>(path: string, options: RequestInit & { token?: string } = {}) {
+  const { token, headers, ...requestOptions } = options;
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    ...requestOptions,
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...headers,
+    },
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.error ?? "Erro de comunicacao com a API local.");
+  }
+
+  return payload as T;
+}
+
 async function sha256(value: string) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
   return Array.from(new Uint8Array(digest))
@@ -284,13 +314,17 @@ function getTemperature(score: number): LeadTemperature {
 }
 
 function App() {
+  const [sessionToken, setSessionToken] = useState(() => localStorage.getItem("atendedor-2-token") ?? "");
   const [isAuthenticated, setIsAuthenticated] = useState(
-    () => localStorage.getItem("atendedor-2-session") === "true",
+    () => Boolean(localStorage.getItem("atendedor-2-token")) || localStorage.getItem("atendedor-2-session") === "true",
   );
   const [activeView, setActiveView] = useState<View>("dashboard");
   const [email, setEmail] = useState(SEEDED_USER_EMAIL);
   const [password, setPassword] = useState("");
   const [loginError, setLoginError] = useState("");
+  const [apiStatus, setApiStatus] = useState<ApiStatus>(sessionToken ? "online" : "local");
+  const [conversationList, setConversationList] = useState(conversations);
+  const [chatMessages, setChatMessages] = useState(messages);
   const [selectedConversation, setSelectedConversation] = useState(conversations[0]);
   const [leadMode, setLeadMode] = useState<"kanban" | "list">("kanban");
   const [leads, setLeads] = useState(initialLeads);
@@ -300,6 +334,31 @@ function App() {
   const [newTag, setNewTag] = useState("");
   const [newLead, setNewLead] = useState({ name: "", state: "", phone: "" });
   const [messageDraft, setMessageDraft] = useState("");
+
+  useEffect(() => {
+    if (!isAuthenticated || !sessionToken) return;
+
+    let isCancelled = false;
+
+    apiRequest<BootstrapData>("/api/bootstrap", { token: sessionToken })
+      .then((data) => {
+        if (isCancelled) return;
+        setLeads(data.leads);
+        setStages(data.stages);
+        setTags(data.tags);
+        setConversationList(data.conversations);
+        setChatMessages(data.messages);
+        setSelectedConversation((current) =>
+          data.conversations.find((conversation) => conversation.id === current.id) ?? data.conversations[0],
+        );
+        setApiStatus("online");
+      })
+      .catch(() => setApiStatus("offline"));
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [isAuthenticated, sessionToken]);
 
   const metrics = useMemo(() => {
     const hotLeads = leads.filter((lead) => lead.temperature === "Quente").length;
@@ -321,28 +380,62 @@ function App() {
     event.preventDefault();
     setLoginError("");
 
+    try {
+      const result = await apiRequest<{ token: string }>("/api/auth/login", {
+        method: "POST",
+        body: JSON.stringify({ email, password }),
+      });
+      localStorage.setItem("atendedor-2-token", result.token);
+      localStorage.setItem("atendedor-2-session", "true");
+      setSessionToken(result.token);
+      setApiStatus("online");
+      setIsAuthenticated(true);
+      return;
+    } catch {
+      setApiStatus("offline");
+    }
+
     const normalizedEmail = email.trim().toLowerCase();
     const passwordHash = await sha256(password);
 
     if (normalizedEmail === SEEDED_USER_EMAIL && passwordHash === SEEDED_PASSWORD_HASH) {
       localStorage.setItem("atendedor-2-session", "true");
       setIsAuthenticated(true);
+      setApiStatus("local");
       return;
     }
 
-    setLoginError("E-mail ou senha invalidos para o usuario seedado.");
+    setLoginError("E-mail ou senha invalidos. Se estiver rodando local, confirme se a API esta aberta.");
   }
 
   function handleLogout() {
+    localStorage.removeItem("atendedor-2-token");
     localStorage.removeItem("atendedor-2-session");
+    setSessionToken("");
     setIsAuthenticated(false);
     setPassword("");
   }
 
-  function addLead(event: FormEvent<HTMLFormElement>) {
+  async function addLead(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     if (!newLead.name.trim() || !newLead.state.trim()) return;
+
+    if (sessionToken) {
+      try {
+        const createdLead = await apiRequest<Lead>("/api/leads", {
+          method: "POST",
+          token: sessionToken,
+          body: JSON.stringify(newLead),
+        });
+        setLeads((current) => [createdLead, ...current]);
+        setApiStatus("online");
+        setNewLead({ name: "", state: "", phone: "" });
+        return;
+      } catch {
+        setApiStatus("offline");
+      }
+    }
 
     const score = 30 + Math.floor(Math.random() * 35);
     setLeads((current) => [
@@ -366,28 +459,73 @@ function App() {
   }
 
   function moveLead(leadId: number, direction: 1 | -1) {
+    let updatedLead: Lead | undefined;
+
     setLeads((current) =>
       current.map((lead) => {
         if (lead.id !== leadId) return lead;
         const currentIndex = stages.indexOf(lead.stage);
         const nextStage = stages[Math.min(Math.max(currentIndex + direction, 0), stages.length - 1)];
-        return { ...lead, stage: nextStage };
+        updatedLead = { ...lead, stage: nextStage };
+        return updatedLead;
       }),
     );
+
+    if (sessionToken && updatedLead) {
+      apiRequest<Lead>(`/api/leads/${leadId}`, {
+        method: "PATCH",
+        token: sessionToken,
+        body: JSON.stringify({ stage: updatedLead.stage }),
+      }).catch(() => setApiStatus("offline"));
+    }
   }
 
-  function addStage(event: FormEvent<HTMLFormElement>) {
+  async function addStage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const value = newStage.trim();
     if (!value || stages.includes(value)) return;
+
+    if (sessionToken) {
+      try {
+        const nextStages = await apiRequest<string[]>("/api/stages", {
+          method: "POST",
+          token: sessionToken,
+          body: JSON.stringify({ name: value }),
+        });
+        setStages(nextStages);
+        setApiStatus("online");
+        setNewStage("");
+        return;
+      } catch {
+        setApiStatus("offline");
+      }
+    }
+
     setStages((current) => [...current, value]);
     setNewStage("");
   }
 
-  function addTag(event: FormEvent<HTMLFormElement>) {
+  async function addTag(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const value = newTag.trim().toLowerCase();
     if (!value || tags.includes(value)) return;
+
+    if (sessionToken) {
+      try {
+        const nextTags = await apiRequest<string[]>("/api/tags", {
+          method: "POST",
+          token: sessionToken,
+          body: JSON.stringify({ name: value }),
+        });
+        setTags(nextTags);
+        setApiStatus("online");
+        setNewTag("");
+        return;
+      } catch {
+        setApiStatus("offline");
+      }
+    }
+
     setTags((current) => [...current, value]);
     setNewTag("");
   }
@@ -493,6 +631,9 @@ function App() {
             <h1>{getPageTitle(activeView)}</h1>
           </div>
           <div className="topbar-actions">
+            <span className={`api-badge ${apiStatus}`}>
+              {apiStatus === "online" ? "API local online" : apiStatus === "offline" ? "Modo local/offline" : "Dados de demo"}
+            </span>
             <div className="search-box">
               <Search size={17} />
               <input placeholder="Buscar conversa, lead ou etiqueta" />
@@ -507,6 +648,8 @@ function App() {
         {activeView === "dashboard" && <Dashboard metrics={metrics} leads={leads} />}
         {activeView === "whatsapp" && (
           <WhatsAppView
+            conversations={conversationList}
+            messages={chatMessages}
             selectedConversation={selectedConversation}
             setSelectedConversation={setSelectedConversation}
             messageDraft={messageDraft}
@@ -653,11 +796,15 @@ function useDashboardMetrics() {
 }
 
 function WhatsAppView({
+  conversations,
+  messages,
   selectedConversation,
   setSelectedConversation,
   messageDraft,
   setMessageDraft,
 }: {
+  conversations: Conversation[];
+  messages: Message[];
   selectedConversation: Conversation;
   setSelectedConversation: (conversation: Conversation) => void;
   messageDraft: string;

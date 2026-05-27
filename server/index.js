@@ -1,0 +1,420 @@
+import { createHmac, createHash, timingSafeEqual } from "node:crypto";
+import { createServer } from "node:http";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const rootDir = resolve(__dirname, "..");
+const dbPath = resolve(rootDir, "data", "atendedor-db.json");
+const port = Number(process.env.PORT ?? 3333);
+const sessionSecret = process.env.SESSION_SECRET ?? "atendedor-2-local-dev-secret";
+
+const SEEDED_USER = {
+  id: "usr_rafael",
+  name: "Rafael Goedert",
+  email: "rafael-goedert@hotmail.com",
+  passwordHash: "f2f3585187d6d62f77b9dac07fd2755c72dcb9bee427216982cb605cf9f5a9bf",
+  role: "admin",
+};
+
+const defaultDatabase = {
+  users: [SEEDED_USER],
+  stages: ["Novo lead", "Qualificando", "Proposta", "Follow-up", "Fechado"],
+  tags: ["imovel", "urgente", "alto potencial", "precisa financiamento"],
+  leads: [
+    {
+      id: 1,
+      name: "Mariana Costa",
+      state: "SC",
+      phone: "+55 48 99912-4455",
+      stage: "Qualificando",
+      score: 82,
+      temperature: "Quente",
+      tags: ["alto potencial", "urgente"],
+      value: 690000,
+      lastContact: "ha 8 min",
+      owner: "IA",
+      summary: "Procura apartamento ate R$ 700 mil, quer visitar no sabado.",
+    },
+    {
+      id: 2,
+      name: "Andre Pereira",
+      state: "PR",
+      phone: "+55 41 98832-0911",
+      stage: "Novo lead",
+      score: 38,
+      temperature: "Frio",
+      tags: ["precisa financiamento"],
+      value: 320000,
+      lastContact: "ha 1 h",
+      owner: "IA",
+      summary: "Ainda pesquisando opcoes e nao informou prazo de compra.",
+    },
+    {
+      id: 3,
+      name: "Lucas Almeida",
+      state: "SP",
+      phone: "+55 11 95545-1209",
+      stage: "Proposta",
+      score: 94,
+      temperature: "Quente",
+      tags: ["alto potencial", "imovel"],
+      value: 940000,
+      lastContact: "hoje, 10:42",
+      owner: "Humano",
+      summary: "Tem orcamento aprovado e comparando duas unidades.",
+    },
+    {
+      id: 4,
+      name: "Bianca Martins",
+      state: "RS",
+      phone: "+55 51 98111-7432",
+      stage: "Follow-up",
+      score: 61,
+      temperature: "Morno",
+      tags: ["imovel"],
+      value: 510000,
+      lastContact: "ontem",
+      owner: "IA",
+      summary: "Pediu retorno apos conversar com a familia.",
+    },
+  ],
+  conversations: [
+    {
+      id: 1,
+      name: "Mariana Costa",
+      phone: "+55 48 99912-4455",
+      state: "SC",
+      status: "online agora",
+      lastMessage: "Quero agendar uma visita no sabado.",
+      unread: 3,
+      score: 82,
+      channel: "WhatsApp",
+    },
+    {
+      id: 2,
+      name: "Andre Pereira",
+      phone: "+55 41 98832-0911",
+      state: "PR",
+      status: "visto ha 14 min",
+      lastMessage: "Pode me mandar as condicoes?",
+      unread: 0,
+      score: 38,
+      channel: "WhatsApp",
+    },
+    {
+      id: 3,
+      name: "Lucas Almeida",
+      phone: "+55 11 95545-1209",
+      state: "SP",
+      status: "digitando...",
+      lastMessage: "A proposta ficou dentro do que preciso.",
+      unread: 1,
+      score: 94,
+      channel: "WhatsApp",
+    },
+  ],
+  messages: [
+    { id: 1, from: "lead", body: "Oi, vi o anuncio e queria entender melhor.", time: "10:28" },
+    {
+      id: 2,
+      from: "agent",
+      body: "Claro, Mariana. Para eu te ajudar melhor, qual e o seu nome completo e de qual estado voce fala?",
+      time: "10:29",
+    },
+    { id: 3, from: "lead", body: "Sou Mariana Costa, de Santa Catarina.", time: "10:30" },
+    {
+      id: 4,
+      from: "system",
+      body: "Lead cadastrado automaticamente no CRM com estado SC e score inicial 54%.",
+      time: "10:30",
+    },
+    {
+      id: 5,
+      from: "agent",
+      body: "Perfeito. Voce busca morar ou investir? E qual faixa de valor faz sentido hoje?",
+      time: "10:31",
+    },
+    {
+      id: 6,
+      from: "lead",
+      body: "Morar. Ate uns 700 mil, se tiver boa localizacao.",
+      time: "10:34",
+    },
+    {
+      id: 7,
+      from: "agent",
+      body: "Audio de 32s explicando as melhores opcoes e pedindo disponibilidade para visita.",
+      time: "10:35",
+      kind: "audio",
+    },
+    { id: 8, from: "lead", body: "Quero agendar uma visita no sabado.", time: "10:41" },
+  ],
+  agentSettings: {
+    businessHours: "Segunda a sexta, 08:00 as 20:00; sabado, 09:00 as 13:00",
+    inactivityMinutes: 25,
+    handoffScore: 80,
+    followUpCadence: ["1 hora", "24 horas", "3 dias", "7 dias"],
+    mainInstruction:
+      "Responda de forma humana, consultiva e objetiva. Colete nome, estado, objetivo, orcamento, prazo e objeções. Classifique cada lead de 0% a 100%.",
+    missions: [
+      "Identificar nome, estado, objetivo e urgencia do lead.",
+      "Mapear orcamento, prazo, objeções e decisores.",
+      "Enviar conteudo correto da base de conhecimento.",
+      "Pontuar interesse de 0% a 100% e acionar humano quando quente.",
+      "Executar follow-ups inteligentes sem parecer robo.",
+    ],
+  },
+  evolution: {
+    baseUrl: "",
+    instance: "atendedor-20",
+    connected: false,
+    webhookPath: "/api/evolution/webhook",
+  },
+};
+
+function jsonResponse(response, status, payload) {
+  response.writeHead(status, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    "Access-Control-Allow-Methods": "GET,POST,PATCH,OPTIONS",
+  });
+  response.end(JSON.stringify(payload));
+}
+
+async function readJsonBody(request) {
+  const chunks = [];
+  for await (const chunk of request) chunks.push(chunk);
+  if (chunks.length === 0) return {};
+  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+}
+
+async function ensureDatabase() {
+  await mkdir(dirname(dbPath), { recursive: true });
+  try {
+    return JSON.parse(await readFile(dbPath, "utf8"));
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+    await writeDatabase(defaultDatabase);
+    return structuredClone(defaultDatabase);
+  }
+}
+
+async function writeDatabase(database) {
+  await mkdir(dirname(dbPath), { recursive: true });
+  await writeFile(dbPath, `${JSON.stringify(database, null, 2)}\n`);
+}
+
+function hashPassword(password) {
+  return createHash("sha256").update(password).digest("hex");
+}
+
+function signToken(user) {
+  const payload = Buffer.from(
+    JSON.stringify({ sub: user.id, email: user.email, role: user.role, issuedAt: Date.now() }),
+  ).toString("base64url");
+  const signature = createHmac("sha256", sessionSecret).update(payload).digest("base64url");
+  return `${payload}.${signature}`;
+}
+
+function verifyToken(token) {
+  if (!token || !token.includes(".")) return false;
+  const [payload, signature] = token.split(".");
+  const expected = createHmac("sha256", sessionSecret).update(payload).digest("base64url");
+  return safeEqual(signature, expected);
+}
+
+function safeEqual(left, right) {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function requireAuth(request, response) {
+  const header = request.headers.authorization ?? "";
+  const token = header.startsWith("Bearer ") ? header.slice(7) : "";
+  if (verifyToken(token)) return true;
+  jsonResponse(response, 401, { error: "Sessao invalida ou expirada." });
+  return false;
+}
+
+function publicDatabase(database) {
+  const { users: _users, ...safeDatabase } = database;
+  return safeDatabase;
+}
+
+function getTemperature(score) {
+  if (score >= 75) return "Quente";
+  if (score >= 45) return "Morno";
+  return "Frio";
+}
+
+async function routeRequest(request, response) {
+  if (request.method === "OPTIONS") {
+    jsonResponse(response, 204, {});
+    return;
+  }
+
+  const url = new URL(request.url ?? "/", `http://${request.headers.host}`);
+
+  try {
+    if (request.method === "GET" && url.pathname === "/api/health") {
+      jsonResponse(response, 200, { status: "ok", service: "Atendedor 2.0 API" });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/auth/login") {
+      const body = await readJsonBody(request);
+      const database = await ensureDatabase();
+      const email = String(body.email ?? "").trim().toLowerCase();
+      const passwordHash = hashPassword(String(body.password ?? ""));
+      const user = database.users.find((candidate) => candidate.email === email);
+
+      if (!user || user.passwordHash !== passwordHash) {
+        jsonResponse(response, 401, { error: "E-mail ou senha invalidos." });
+        return;
+      }
+
+      jsonResponse(response, 200, {
+        token: signToken(user),
+        user: { id: user.id, name: user.name, email: user.email, role: user.role },
+      });
+      return;
+    }
+
+    if (!requireAuth(request, response)) return;
+
+    if (request.method === "GET" && url.pathname === "/api/bootstrap") {
+      const database = await ensureDatabase();
+      jsonResponse(response, 200, publicDatabase(database));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/leads") {
+      const body = await readJsonBody(request);
+      const database = await ensureDatabase();
+      const name = String(body.name ?? "").trim();
+      const state = String(body.state ?? "").trim().toUpperCase();
+      const phone = String(body.phone ?? "").trim() || "WhatsApp pendente";
+
+      if (!name || !state) {
+        jsonResponse(response, 400, { error: "Nome e estado sao obrigatorios." });
+        return;
+      }
+
+      const score = 30 + Math.floor(Math.random() * 35);
+      const lead = {
+        id: Date.now(),
+        name,
+        state,
+        phone,
+        stage: database.stages[0],
+        score,
+        temperature: getTemperature(score),
+        tags: ["novo"],
+        value: 0,
+        lastContact: "agora",
+        owner: "IA",
+        summary: "Lead criado manualmente. A IA deve completar qualificacao na conversa.",
+      };
+
+      database.leads.unshift(lead);
+      await writeDatabase(database);
+      jsonResponse(response, 201, lead);
+      return;
+    }
+
+    if (request.method === "PATCH" && url.pathname.startsWith("/api/leads/")) {
+      const leadId = Number(url.pathname.split("/").at(-1));
+      const body = await readJsonBody(request);
+      const database = await ensureDatabase();
+      const lead = database.leads.find((candidate) => candidate.id === leadId);
+
+      if (!lead) {
+        jsonResponse(response, 404, { error: "Lead nao encontrado." });
+        return;
+      }
+
+      Object.assign(lead, body);
+      if (typeof lead.score === "number") lead.temperature = getTemperature(lead.score);
+      await writeDatabase(database);
+      jsonResponse(response, 200, lead);
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/stages") {
+      const body = await readJsonBody(request);
+      const database = await ensureDatabase();
+      const stage = String(body.name ?? "").trim();
+
+      if (!stage) {
+        jsonResponse(response, 400, { error: "Nome da etapa e obrigatorio." });
+        return;
+      }
+
+      if (!database.stages.includes(stage)) database.stages.push(stage);
+      await writeDatabase(database);
+      jsonResponse(response, 201, database.stages);
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/tags") {
+      const body = await readJsonBody(request);
+      const database = await ensureDatabase();
+      const tag = String(body.name ?? "").trim().toLowerCase();
+
+      if (!tag) {
+        jsonResponse(response, 400, { error: "Nome da etiqueta e obrigatorio." });
+        return;
+      }
+
+      if (!database.tags.includes(tag)) database.tags.push(tag);
+      await writeDatabase(database);
+      jsonResponse(response, 201, database.tags);
+      return;
+    }
+
+    if (request.method === "PATCH" && url.pathname === "/api/settings/agent") {
+      const body = await readJsonBody(request);
+      const database = await ensureDatabase();
+      database.agentSettings = { ...database.agentSettings, ...body };
+      await writeDatabase(database);
+      jsonResponse(response, 200, database.agentSettings);
+      return;
+    }
+
+    if (request.method === "PATCH" && url.pathname === "/api/settings/evolution") {
+      const body = await readJsonBody(request);
+      const database = await ensureDatabase();
+      database.evolution = {
+        ...database.evolution,
+        baseUrl: String(body.baseUrl ?? database.evolution.baseUrl),
+        instance: String(body.instance ?? database.evolution.instance),
+        connected: Boolean(body.baseUrl ?? database.evolution.baseUrl),
+      };
+      await writeDatabase(database);
+      jsonResponse(response, 200, database.evolution);
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/evolution/webhook") {
+      const body = await readJsonBody(request);
+      const database = await ensureDatabase();
+      database.lastWebhook = { receivedAt: new Date().toISOString(), payload: body };
+      await writeDatabase(database);
+      jsonResponse(response, 200, { ok: true });
+      return;
+    }
+
+    jsonResponse(response, 404, { error: "Rota nao encontrada." });
+  } catch (error) {
+    console.error(error);
+    jsonResponse(response, 500, { error: "Erro interno da API local." });
+  }
+}
+
+createServer(routeRequest).listen(port, () => {
+  console.log(`Atendedor 2.0 API rodando em http://localhost:${port}`);
+});
