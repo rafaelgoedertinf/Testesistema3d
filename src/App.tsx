@@ -111,6 +111,14 @@ type EvolutionQrCodeResult = {
   };
 };
 
+type WhatsAppStatus = {
+  ok: boolean;
+  instance: string;
+  state: string;
+  connected: boolean;
+  checkedAt?: string;
+};
+
 type BootstrapData = {
   stages: string[];
   tags: string[];
@@ -400,6 +408,12 @@ function App() {
   const [evolutionActionStatus, setEvolutionActionStatus] = useState("");
   const [evolutionQrCode, setEvolutionQrCode] = useState<EvolutionQrCodeResult["qrCode"] | null>(null);
   const [evolutionBusy, setEvolutionBusy] = useState<"" | "test" | "qrcode" | "reset">("");
+  const [whatsAppStatus, setWhatsAppStatus] = useState<WhatsAppStatus>({
+    ok: false,
+    instance: "atendedor-20",
+    state: "checking",
+    connected: false,
+  });
 
   useEffect(() => {
     if (!isAuthenticated || !sessionToken) return;
@@ -425,6 +439,36 @@ function App() {
 
     return () => {
       isCancelled = true;
+    };
+  }, [isAuthenticated, sessionToken]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !sessionToken) return;
+
+    let isCancelled = false;
+
+    async function refreshWhatsAppStatus() {
+      try {
+        const status = await apiRequest<WhatsAppStatus>("/api/evolution/status", { token: sessionToken });
+        if (!isCancelled) setWhatsAppStatus(status);
+      } catch {
+        if (!isCancelled) {
+          setWhatsAppStatus((current) => ({
+            ...current,
+            ok: false,
+            connected: false,
+            state: "unreachable",
+          }));
+        }
+      }
+    }
+
+    refreshWhatsAppStatus();
+    const intervalId = window.setInterval(refreshWhatsAppStatus, 15000);
+
+    return () => {
+      isCancelled = true;
+      window.clearInterval(intervalId);
     };
   }, [isAuthenticated, sessionToken]);
 
@@ -863,8 +907,9 @@ function App() {
             <h1>{getPageTitle(activeView)}</h1>
           </div>
           <div className="topbar-actions">
+            <WhatsAppStatusBadge status={whatsAppStatus} />
             <span className={`api-badge ${apiStatus}`}>
-              {apiStatus === "online" ? "API local online" : apiStatus === "offline" ? "Modo local/offline" : "Dados de demo"}
+              {apiStatus === "online" ? "API online" : apiStatus === "offline" ? "Modo local/offline" : "Dados de demo"}
             </span>
             <div className="search-box">
               <Search size={17} />
@@ -927,6 +972,44 @@ function App() {
           />
         )}
       </main>
+    </div>
+  );
+}
+
+
+function getWhatsAppStatusLabel(status: WhatsAppStatus) {
+  const normalizedState = String(status.state || "unknown").toLowerCase();
+
+  if (status.connected || ["open", "connected", "online"].includes(normalizedState)) {
+    return { label: "WhatsApp conectado", className: "online" };
+  }
+
+  if (["connecting", "created", "qr", "pairing"].includes(normalizedState)) {
+    return { label: "WhatsApp conectando", className: "pending" };
+  }
+
+  if (["not_configured", "not_created"].includes(normalizedState)) {
+    return { label: "WhatsApp nao configurado", className: "offline" };
+  }
+
+  if (normalizedState === "unreachable") {
+    return { label: "WhatsApp sem resposta", className: "offline" };
+  }
+
+  if (normalizedState === "checking") {
+    return { label: "Verificando WhatsApp", className: "pending" };
+  }
+
+  return { label: `WhatsApp: ${status.state || "desconhecido"}`, className: "offline" };
+}
+
+function WhatsAppStatusBadge({ status }: { status: WhatsAppStatus }) {
+  const statusInfo = getWhatsAppStatusLabel(status);
+
+  return (
+    <div className={`whatsapp-status ${statusInfo.className}`} title={`Instancia: ${status.instance || "atendedor-20"}`}>
+      <span />
+      <strong>{statusInfo.label}</strong>
     </div>
   );
 }

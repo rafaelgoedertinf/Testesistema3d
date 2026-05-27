@@ -762,6 +762,52 @@ async function routeRequest(request, response) {
       return;
     }
 
+    if (request.method === "GET" && url.pathname === "/api/evolution/status") {
+      const database = await ensureDatabase();
+      const evolution = database.evolution ?? defaultDatabase.evolution;
+      const instance = getManagedInstanceName(evolution);
+
+      if (!evolution.baseUrl || !evolution.apiKey) {
+        jsonResponse(response, 200, {
+          ok: false,
+          instance,
+          state: "not_configured",
+          connected: false,
+          checkedAt: new Date().toISOString(),
+        });
+        return;
+      }
+
+      let state = "unknown";
+      try {
+        const payload = await callEvolutionApi(database, `/instance/connectionState/${encodeURIComponent(instance)}`);
+        state = payload?.instance?.state ?? payload?.state ?? payload?.connectionStatus ?? payload?.status ?? "desconhecido";
+      } catch (error) {
+        if (error?.status === 404) {
+          state = "not_created";
+        } else {
+          throw error;
+        }
+      }
+
+      database.evolution = {
+        ...evolution,
+        instance,
+        lastStatusAt: new Date().toISOString(),
+        lastConnectionState: state,
+      };
+      await writeDatabase(database);
+
+      jsonResponse(response, 200, {
+        ok: true,
+        instance,
+        state,
+        connected: ["open", "connected", "online"].includes(String(state).toLowerCase()),
+        checkedAt: database.evolution.lastStatusAt,
+      });
+      return;
+    }
+
     if (request.method === "POST" && url.pathname === "/api/evolution/test") {
       const database = await ensureDatabase();
       const instanceStatus = await ensureEvolutionInstance(database);
