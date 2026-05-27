@@ -12,6 +12,7 @@ const distDir = resolve(rootDir, "dist");
 const port = Number(process.env.PORT ?? 3333);
 const sessionSecret = process.env.SESSION_SECRET ?? "atendedor-2-local-dev-secret";
 const databaseUrl = process.env.DATABASE_URL;
+const databaseUrlInfo = getDatabaseUrlInfo(databaseUrl);
 const { Pool } = pg;
 const pgPool = databaseUrl
   ? new Pool({
@@ -21,6 +22,44 @@ const pgPool = databaseUrl
   : null;
 let storageMode = pgPool ? "postgres" : "local-json";
 let lastPostgresError = "";
+
+
+function getDatabaseUrlInfo(url) {
+  if (!url) return { configured: false };
+
+  try {
+    const parsed = new URL(url);
+    return {
+      configured: true,
+      protocol: parsed.protocol.replace(":", ""),
+      username: parsed.username ? `${parsed.username.slice(0, 18)}${parsed.username.length > 18 ? "..." : ""}` : "",
+      passwordPresent: Boolean(parsed.password),
+      host: parsed.hostname,
+      port: parsed.port || "default",
+      database: parsed.pathname.replace(/^\//, "") || "default",
+      looksLikeSupabasePooler: parsed.hostname.includes("pooler.supabase"),
+      looksLikeSupabaseDirect: parsed.hostname.includes("supabase.co"),
+    };
+  } catch {
+    return { configured: true, invalidUrl: true };
+  }
+}
+
+async function probePostgres() {
+  if (!pgPool) {
+    return { postgresConfigured: false, postgresHealthy: false, error: "DATABASE_URL ausente" };
+  }
+
+  try {
+    await pgPool.query("SELECT 1");
+    storageMode = "postgres";
+    lastPostgresError = "";
+    return { postgresConfigured: true, postgresHealthy: true, error: "" };
+  } catch (error) {
+    rememberPostgresError(error);
+    return { postgresConfigured: true, postgresHealthy: false, error: lastPostgresError };
+  }
+}
 
 const SEEDED_USER = {
   id: "usr_rafael",
@@ -507,11 +546,13 @@ async function routeRequest(request, response) {
     }
 
     if (request.method === "GET" && url.pathname === "/api/diagnostics/storage") {
+      const probe = await probePostgres();
       jsonResponse(response, 200, {
         storageMode,
-        postgresConfigured: Boolean(pgPool),
-        postgresHealthy: storageMode === "postgres" && !lastPostgresError,
-        lastPostgresError,
+        postgresConfigured: probe.postgresConfigured,
+        postgresHealthy: probe.postgresHealthy,
+        lastPostgresError: probe.error,
+        databaseUrl: databaseUrlInfo,
       });
       return;
     }
