@@ -821,6 +821,38 @@ function App() {
     }
   }
 
+  function archiveConversationLocal(conversation: Conversation, archive: boolean) {
+    const aliases = new Set([conversation.id, conversation.remoteJid, ...(conversation.aliases ?? [])].filter(Boolean));
+    setConversationList((current) =>
+      current.map((item) =>
+        [item.id, item.remoteJid, ...(item.aliases ?? [])].some((id) => aliases.has(id))
+          ? { ...item, archived: archive }
+          : item,
+      ),
+    );
+    setSelectedConversation((current) =>
+      [current.id, current.remoteJid, ...(current.aliases ?? [])].some((id) => aliases.has(id))
+        ? { ...current, archived: archive }
+        : current,
+    );
+  }
+
+  function deleteConversationLocal(conversation: Conversation) {
+    const aliases = new Set([conversation.id, conversation.remoteJid, ...(conversation.aliases ?? [])].filter(Boolean));
+    setConversationList((current) => {
+      const next = current.filter((item) => ![item.id, item.remoteJid, ...(item.aliases ?? [])].some((id) => aliases.has(id)));
+      setSelectedConversation((selected) =>
+        [selected.id, selected.remoteJid, ...(selected.aliases ?? [])].some((id) => aliases.has(id))
+          ? (next[0] ?? selected)
+          : selected,
+      );
+      return next;
+    });
+    setChatMessages((current) =>
+      current.filter((message) => !aliases.has(message.remoteJid) && !aliases.has(message.conversationId)),
+    );
+  }
+
   async function syncWhatsApp(silent = false) {
     if (!silent) {
       setWhatsAppSyncStatus("Sincronizando conversas e mensagens...");
@@ -1293,6 +1325,8 @@ function App() {
             newConversationPhone={newConversationPhone}
             setNewConversationPhone={setNewConversationPhone}
             startNewConversation={startNewConversation}
+            archiveConversationLocal={archiveConversationLocal}
+            deleteConversationLocal={deleteConversationLocal}
           />
         )}
         {activeView === "leads" && (
@@ -1513,6 +1547,8 @@ function WhatsAppView({
   newConversationPhone,
   setNewConversationPhone,
   startNewConversation,
+  archiveConversationLocal,
+  deleteConversationLocal,
 }: {
   conversations: Conversation[];
   messages: Message[];
@@ -1536,6 +1572,8 @@ function WhatsAppView({
   newConversationPhone: string;
   setNewConversationPhone: (value: string) => void;
   startNewConversation: (event: FormEvent<HTMLFormElement>) => void;
+  archiveConversationLocal: (conversation: Conversation, archive: boolean) => void;
+  deleteConversationLocal: (conversation: Conversation) => void;
 }) {
   const selectedRemoteJid = selectedConversation.remoteJid ?? selectedConversation.id;
   const selectedAliases = new Set([selectedRemoteJid, selectedConversation.id, ...(selectedConversation.aliases ?? [])]);
@@ -1648,18 +1686,22 @@ function WhatsAppView({
   }
 
   async function deleteCurrentConversation() {
+    const conversationToDelete = selectedConversation;
+    deleteConversationLocal(conversationToDelete);
     await apiRequest<{ ok: boolean }>("/api/whatsapp/delete-conversation", {
       method: "POST",
       token: localStorage.getItem("atendedor-2-token") ?? "",
-      body: JSON.stringify({ remoteJid: selectedConversation.remoteJid, conversationId: selectedConversation.id }),
+      body: JSON.stringify({ remoteJid: conversationToDelete.remoteJid, conversationId: conversationToDelete.id }),
     });
   }
 
   async function archiveCurrentConversation(archive: boolean) {
+    const conversationToArchive = selectedConversation;
+    archiveConversationLocal(conversationToArchive, archive);
     await apiRequest<{ ok: boolean }>("/api/whatsapp/archive-conversation", {
       method: "POST",
       token: localStorage.getItem("atendedor-2-token") ?? "",
-      body: JSON.stringify({ remoteJid: selectedConversation.remoteJid, conversationId: selectedConversation.id, archive }),
+      body: JSON.stringify({ remoteJid: conversationToArchive.remoteJid, conversationId: conversationToArchive.id, archive }),
     });
   }
 

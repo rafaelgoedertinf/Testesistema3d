@@ -915,6 +915,57 @@ function getRecipientCandidates(remoteJid, phone) {
   return Array.from(new Set(candidates.filter(Boolean)));
 }
 
+function findConversationByAnyId(database, value) {
+  const raw = String(value ?? "");
+  const normalized = normalizeRemoteJid(raw);
+  return (database.conversations ?? []).find(
+    (item) =>
+      String(item.id) === raw ||
+      String(item.remoteJid) === raw ||
+      String(item.id) === normalized ||
+      String(item.remoteJid) === normalized ||
+      (item.aliases ?? []).includes(raw) ||
+      (item.aliases ?? []).includes(normalized),
+  );
+}
+
+function getConversationAliases(database, remoteJid) {
+  const raw = String(remoteJid ?? "");
+  const normalized = normalizeRemoteJid(raw);
+  const conversation = findConversationByAnyId(database, raw);
+  return Array.from(new Set([raw, normalized, conversation?.remoteJid, conversation?.id, ...(conversation?.aliases ?? [])].filter(Boolean)));
+}
+
+function setConversationLocalState(database, remoteJid, state) {
+  const aliases = getConversationAliases(database, remoteJid);
+  database.whatsappConversationState = database.whatsappConversationState ?? {};
+
+  for (const alias of aliases) {
+    database.whatsappConversationState[alias] = {
+      ...(database.whatsappConversationState[alias] ?? {}),
+      ...state,
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
+  return aliases;
+}
+
+function getConversationLocalState(database, conversation) {
+  const aliases = [conversation?.remoteJid, conversation?.id, ...(conversation?.aliases ?? [])].filter(Boolean);
+  const states = aliases.map((alias) => database.whatsappConversationState?.[alias]).filter(Boolean);
+  return {
+    deleted: states.some((state) => state.deleted),
+    archived: states.some((state) => state.archived),
+  };
+}
+
+function applyConversationLocalStates(database, conversations) {
+  return (conversations ?? [])
+    .map((conversation) => ({ ...conversation, ...getConversationLocalState(database, conversation) }))
+    .filter((conversation) => !conversation.deleted);
+}
+
 function getLastMessageForChat(database, remoteJid) {
   const aliases = new Set([remoteJid]);
   const conversation = (database.conversations ?? []).find(
@@ -1271,7 +1322,10 @@ async function syncWhatsAppHistory(database, options = {}) {
   const mergedMessages = mergeByKey(remappedExistingMessages, remappedImportedMessages, (item) => item.evolutionMessageId || item.id);
 
   mergedMessages.sort((a, b) => Number(a.timestamp ?? 0) - Number(b.timestamp ?? 0));
-  const mergedConversations = enrichConversationsFromMessages(applyUnreadCounts(canonicalConversations, mergedMessages), mergedMessages);
+  const mergedConversations = applyConversationLocalStates(
+    database,
+    enrichConversationsFromMessages(applyUnreadCounts(canonicalConversations, mergedMessages), mergedMessages),
+  );
   mergedConversations.sort(
     (a, b) => new Date(b.lastMessageAt ?? 0).getTime() - new Date(a.lastMessageAt ?? 0).getTime(),
   );
@@ -1661,7 +1715,9 @@ async function routeRequest(request, response) {
     if (request.method === "POST" && url.pathname === "/api/whatsapp/read") {
       const body = await readJsonBody(request);
       const database = await ensureDatabase();
-      const remoteJid = normalizeRemoteJid(body.remoteJid || body.conversationId);
+      const requestedConversation = body.remoteJid || body.conversationId;
+      const conversation = findConversationByAnyId(database, requestedConversation);
+      const remoteJid = conversation?.remoteJid || conversation?.id || normalizeRemoteJid(requestedConversation);
       const now = new Date().toISOString();
 
       database.conversations = (database.conversations ?? []).map((conversation) => {
@@ -1872,7 +1928,9 @@ async function routeRequest(request, response) {
       const body = await readJsonBody(request);
       const database = await ensureDatabase();
       const { instance } = getEvolutionConfig(database);
-      const remoteJid = normalizeRemoteJid(body.remoteJid || body.conversationId);
+      const requestedConversation = body.remoteJid || body.conversationId;
+      const conversation = findConversationByAnyId(database, requestedConversation);
+      const remoteJid = conversation?.remoteJid || conversation?.id || normalizeRemoteJid(requestedConversation);
       const archive = body.archive !== false;
 
       if (!remoteJid) {
@@ -1889,9 +1947,10 @@ async function routeRequest(request, response) {
         }),
       });
 
+      const aliases = setConversationLocalState(database, remoteJid, { archived: archive, deleted: false });
       database.conversations = (database.conversations ?? []).map((conversation) =>
-        (conversation.remoteJid || conversation.id) === remoteJid || (conversation.aliases ?? []).includes(remoteJid)
-          ? { ...conversation, archived: archive }
+        aliases.map(String).includes(String(conversation.remoteJid)) || aliases.map(String).includes(String(conversation.id))
+          ? { ...conversation, archived: archive, deleted: false }
           : conversation,
       );
       await writeDatabase(database);
@@ -1904,11 +1963,10 @@ async function routeRequest(request, response) {
       const body = await readJsonBody(request);
       const database = await ensureDatabase();
       const { instance } = getEvolutionConfig(database);
-      const remoteJid = normalizeRemoteJid(body.remoteJid || body.conversationId);
-      const conversation = (database.conversations ?? []).find(
-        (item) => (item.remoteJid || item.id) === remoteJid || (item.aliases ?? []).includes(remoteJid),
-      );
-      const aliases = [remoteJid, conversation?.remoteJid, conversation?.id, ...(conversation?.aliases ?? [])].filter(Boolean);
+      const requestedConversation = body.remoteJid || body.conversationId;
+      const conversation = findConversationByAnyId(database, requestedConversation);
+      const remoteJid = conversation?.remoteJid || conversation?.id || normalizeRemoteJid(requestedConversation);
+      const aliases = setConversationLocalState(database, remoteJid, { archived: true, deleted: true });
 
       const archiveResult = await tryEvolutionApi(database, `/chat/archiveChat/${encodeURIComponent(instance)}`, {
         method: "POST",
@@ -1920,10 +1978,10 @@ async function routeRequest(request, response) {
       });
 
       database.conversations = (database.conversations ?? []).filter(
-        (item) => !aliases.includes(item.remoteJid) && !aliases.includes(item.id),
+        (item) => !aliases.map(String).includes(String(item.remoteJid)) && !aliases.map(String).includes(String(item.id)),
       );
       database.messages = (database.messages ?? []).filter(
-        (item) => !aliases.includes(item.remoteJid) && !aliases.includes(item.conversationId),
+        (item) => !aliases.map(String).includes(String(item.remoteJid)) && !aliases.map(String).includes(String(item.conversationId)),
       );
       await writeDatabase(database);
 
