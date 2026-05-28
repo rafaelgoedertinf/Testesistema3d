@@ -85,6 +85,7 @@ type Message = {
   fileName?: string;
   mimeType?: string;
   status?: "pending" | "sent" | "failed";
+  rawType?: string;
   reactions?: Array<{ emoji: string; fromMe?: boolean; at?: string }>;
   replyTo?: { id: string | number; body: string; from: "lead" | "agent" | "system" };
 };
@@ -1279,8 +1280,6 @@ function App() {
             syncWhatsApp={syncWhatsApp}
             sendWhatsAppText={sendWhatsAppText}
             sendWhatsAppMedia={sendWhatsAppMedia}
-            selectedMessageIds={selectedMessageIds}
-            setSelectedMessageIds={setSelectedMessageIds}
             replyToMessage={replyToMessage}
             setReplyToMessage={setReplyToMessage}
             isRecordingAudio={isRecordingAudio}
@@ -1500,8 +1499,6 @@ function WhatsAppView({
   syncWhatsApp,
   sendWhatsAppText,
   sendWhatsAppMedia,
-  selectedMessageIds,
-  setSelectedMessageIds,
   replyToMessage,
   setReplyToMessage,
   isRecordingAudio,
@@ -1524,8 +1521,6 @@ function WhatsAppView({
   syncWhatsApp: () => void;
   sendWhatsAppText: () => void;
   sendWhatsAppMedia: (file: File, mediaType: "audio" | "video" | "image" | "document") => void;
-  selectedMessageIds: Array<string | number>;
-  setSelectedMessageIds: (ids: Array<string | number>) => void;
   replyToMessage: Message | null;
   setReplyToMessage: (message: Message | null) => void;
   isRecordingAudio: boolean;
@@ -1542,6 +1537,7 @@ function WhatsAppView({
   const selectedAliases = new Set([selectedRemoteJid, selectedConversation.id, ...(selectedConversation.aliases ?? [])]);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const [isAttachMenuOpen, setIsAttachMenuOpen] = useState(false);
+  const [openMessageMenuId, setOpenMessageMenuId] = useState<string | number | null>(null);
   const visibleMessages = messages.filter((message) => {
     if (message.remoteJid || message.conversationId) {
       return selectedAliases.has(message.remoteJid ?? message.conversationId ?? "");
@@ -1549,21 +1545,6 @@ function WhatsAppView({
 
     return conversations.length <= 3;
   });
-
-  const selectedMessages = visibleMessages.filter((message) => selectedMessageIds.includes(message.id));
-  const selectedMessage = selectedMessages[0] ?? visibleMessages[visibleMessages.length - 1];
-
-  function toggleMessageSelection(message: Message) {
-    setSelectedMessageIds(
-      selectedMessageIds.includes(message.id)
-        ? selectedMessageIds.filter((id) => id !== message.id)
-        : [...selectedMessageIds, message.id],
-    );
-  }
-
-  function clearMessageSelection() {
-    setSelectedMessageIds([]);
-  }
 
   function triggerFile(mediaType: "audio" | "video" | "image" | "document") {
     const input = document.createElement("input");
@@ -1583,22 +1564,21 @@ function WhatsAppView({
     input.click();
   }
 
-  async function copySelectedMessage() {
-    const text = (selectedMessages.length ? selectedMessages : [selectedMessage]).filter(Boolean).map((message) => message.body).join("\n");
-    if (!text) return;
-    await navigator.clipboard?.writeText(text);
+  async function copyMessage(message: Message) {
+    if (!message.body) return;
+    await navigator.clipboard?.writeText(message.body);
+    setOpenMessageMenuId(null);
   }
 
-  function forwardSelectedMessage() {
-    if (!selectedMessage?.body) return;
-    setMessageDraft(messageDraft || selectedMessage.body);
-    clearMessageSelection();
+  function forwardMessage(message: Message) {
+    if (!message.body) return;
+    setMessageDraft(messageDraft || message.body);
+    setOpenMessageMenuId(null);
   }
 
-  function replySelectedMessage() {
-    if (!selectedMessage) return;
-    setReplyToMessage(selectedMessage);
-    clearMessageSelection();
+  function replyMessage(message: Message) {
+    setReplyToMessage(message);
+    setOpenMessageMenuId(null);
   }
 
   async function downloadMedia(message: Message) {
@@ -1618,15 +1598,14 @@ function WhatsAppView({
     }
   }
 
-  async function deleteSelectedMessages() {
-    const ids = selectedMessages.map((message) => message.evolutionMessageId || message.id);
-    if (!ids.length) return;
+  async function deleteMessage(message: Message) {
+    const id = message.evolutionMessageId || message.id;
     await apiRequest<{ ok: boolean }>("/api/whatsapp/delete-message", {
       method: "POST",
       token: localStorage.getItem("atendedor-2-token") ?? "",
-      body: JSON.stringify({ messageIds: ids }),
+      body: JSON.stringify({ messageIds: [id] }),
     });
-    setSelectedMessageIds([]);
+    setOpenMessageMenuId(null);
   }
 
   async function deleteCurrentConversation() {
@@ -1637,14 +1616,13 @@ function WhatsAppView({
     });
   }
 
-  async function reactToSelectedMessage(emoji: string) {
-    if (!selectedMessage) return;
+  async function reactToMessage(message: Message, emoji: string) {
     await apiRequest<{ ok: boolean }>("/api/whatsapp/reaction", {
       method: "POST",
       token: localStorage.getItem("atendedor-2-token") ?? "",
-      body: JSON.stringify({ messageId: selectedMessage.evolutionMessageId || selectedMessage.id, emoji }),
+      body: JSON.stringify({ messageId: message.evolutionMessageId || message.id, emoji }),
     });
-    clearMessageSelection();
+    setOpenMessageMenuId(null);
   }
 
   useEffect(() => {
@@ -1707,28 +1685,39 @@ function WhatsAppView({
           <button className="delete-conversation-button" onClick={deleteCurrentConversation} title="Excluir conversa">Excluir</button>
         </header>
 
-        {selectedMessageIds.length > 0 && (
-          <div className="message-selection-toolbar">
-            <strong>{selectedMessageIds.length} selecionada(s)</strong>
-            <button onClick={replySelectedMessage}>Responder</button>
-            <button onClick={forwardSelectedMessage}>Encaminhar</button>
-            <button onClick={copySelectedMessage}>Copiar</button>
-            <button onClick={() => reactToSelectedMessage("👍")}>👍</button>
-            <button onClick={() => reactToSelectedMessage("❤️")}>❤️</button>
-            <button onClick={() => reactToSelectedMessage("😂")}>😂</button>
-            <button className="danger" onClick={deleteSelectedMessages}>Excluir</button>
-            <button onClick={clearMessageSelection}>Cancelar</button>
-          </div>
-        )}
-
         <div className="messages">
           {visibleMessages.length ? (
             visibleMessages.map((message) => (
               <div
-                className={`message ${message.from} ${selectedMessageIds.includes(message.id) ? "selected" : ""}`}
+                className={`message ${message.from}`}
                 key={message.id}
-                onClick={() => toggleMessageSelection(message)}
               >
+                <button
+                  className="message-menu-trigger"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setOpenMessageMenuId(openMessageMenuId === message.id ? null : message.id);
+                  }}
+                  aria-label="Opcoes da mensagem"
+                >
+                  ▾
+                </button>
+                {openMessageMenuId === message.id && (
+                  <div className="message-menu">
+                    <button onClick={() => replyMessage(message)}>Responder</button>
+                    <button onClick={() => forwardMessage(message)}>Encaminhar</button>
+                    <button onClick={() => copyMessage(message)}>Copiar</button>
+                    {(message.mediaUrl || message.fileName || message.rawType !== "conversation") && (
+                      <button onClick={() => downloadMedia(message)}>Baixar</button>
+                    )}
+                    <div className="message-menu-reactions">
+                      {['👍', '❤️', '😂', '😮', '😢', '🙏'].map((emoji) => (
+                        <button key={emoji} onClick={() => reactToMessage(message, emoji)}>{emoji}</button>
+                      ))}
+                    </div>
+                    <button className="danger" onClick={() => deleteMessage(message)}>Excluir</button>
+                  </div>
+                )}
                 <MessageContent message={message} onDownloadMedia={downloadMedia} />
                 <small>{message.time}{message.status === "pending" ? " • enviando" : message.status === "failed" ? " • falhou" : ""}</small>
               </div>
