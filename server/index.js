@@ -700,6 +700,65 @@ function stripDataUrl(value) {
   return text.includes(",") && text.startsWith("data:") ? text.split(",").slice(1).join(",") : text;
 }
 
+function parseDataUrl(value, fallbackMimeType = "application/octet-stream") {
+  const text = String(value ?? "");
+  const match = text.match(/^data:([^;,]+)?;base64,(.*)$/s);
+  if (match) return { mimeType: match[1] || fallbackMimeType, base64: match[2] };
+  return { mimeType: fallbackMimeType, base64: text };
+}
+
+function safeFileName(value, fallback = "arquivo") {
+  return String(value || fallback).replace(/[\\/:*?"<>|]+/g, "-").slice(0, 180) || fallback;
+}
+
+function binaryResponse(response, { base64, mimeType, fileName }) {
+  const buffer = Buffer.from(stripDataUrl(base64), "base64");
+  response.writeHead(200, {
+    "Content-Type": mimeType || "application/octet-stream",
+    "Content-Length": buffer.length,
+    "Content-Disposition": `attachment; filename="${safeFileName(fileName)}"`,
+    "Cache-Control": "private, max-age=300",
+    "Access-Control-Allow-Origin": "*",
+  });
+  response.end(buffer);
+}
+
+async function resolveMediaPayload(database, instance, message) {
+  if (message.mediaUrl?.startsWith("data:")) {
+    const parsed = parseDataUrl(message.mediaUrl, message.mimeType || "application/octet-stream");
+    return {
+      base64: parsed.base64,
+      mimeType: parsed.mimeType,
+      fileName: message.fileName || "arquivo",
+      dataUrl: message.mediaUrl,
+    };
+  }
+
+  if (message.mediaUrl?.startsWith("http")) {
+    const mediaResponse = await fetch(message.mediaUrl);
+    if (!mediaResponse.ok) throw new Error(`Download HTTP retornou ${mediaResponse.status}`);
+    const arrayBuffer = await mediaResponse.arrayBuffer();
+    const mimeType = mediaResponse.headers.get("content-type") || message.mimeType || "application/octet-stream";
+    const base64 = Buffer.from(arrayBuffer).toString("base64");
+    return { base64, mimeType, fileName: message.fileName || "arquivo", dataUrl: `data:${mimeType};base64,${base64}` };
+  }
+
+  if (!message.rawMessage) {
+    throw new Error("A Evolution nao retornou dados suficientes para baixar este arquivo. Sincronize novamente.");
+  }
+
+  const payload = await callEvolutionApi(database, `/chat/getBase64FromMediaMessage/${encodeURIComponent(instance)}`, {
+    method: "POST",
+    body: JSON.stringify({ message: message.rawMessage, convertToMp4: false }),
+  });
+  const rawBase64 = payload?.base64 || payload?.data?.base64 || payload?.file?.base64 || payload?.media || "";
+  const parsed = parseDataUrl(rawBase64, payload?.mimetype || payload?.mimeType || payload?.data?.mimetype || message.mimeType || "application/octet-stream");
+  const fileName = payload?.fileName || payload?.filename || message.fileName || "arquivo";
+
+  if (!parsed.base64) throw new Error("Nao foi possivel obter o arquivo na Evolution.");
+  return { base64: parsed.base64, mimeType: parsed.mimeType, fileName, dataUrl: `data:${parsed.mimeType};base64,${parsed.base64}` };
+}
+
 function getProfilePicUrl(source, contactInfo = {}) {
   return (
     contactInfo.profilePicUrl ||
@@ -1514,7 +1573,9 @@ async function routeRequest(request, response) {
     }
 
     if (request.method === "GET" && url.pathname.startsWith("/api/whatsapp/media/")) {
-      const messageId = decodeURIComponent(url.pathname.split("/").at(-1) ?? "");
+      const parts = url.pathname.split("/");
+      const isDownload = parts.at(-1) === "download";
+      const messageId = decodeURIComponent(isDownload ? (parts.at(-2) ?? "") : (parts.at(-1) ?? ""));
       const database = await ensureDatabase();
       const { instance } = getEvolutionConfig(database);
       const message = (database.messages ?? []).find(
@@ -1526,43 +1587,24 @@ async function routeRequest(request, response) {
         return;
       }
 
-      if (message.mediaUrl?.startsWith("data:") || message.mediaUrl?.startsWith("http")) {
-        jsonResponse(response, 200, {
-          ok: true,
-          dataUrl: message.mediaUrl,
-          fileName: message.fileName || "arquivo",
-          mimeType: message.mimeType || "application/octet-stream",
-        });
-        return;
+      try {
+        const media = await resolveMediaPayload(database, instance, message);
+        database.messages = (database.messages ?? []).map((item) =>
+          String(item.id) === messageId || String(item.evolutionMessageId) === messageId
+            ? { ...item, mediaUrl: media.dataUrl, mimeType: media.mimeType, fileName: media.fileName }
+            : item,
+        );
+        await writeDatabase(database);
+
+        if (isDownload || url.searchParams.get("download") === "1") {
+          binaryResponse(response, media);
+          return;
+        }
+
+        jsonResponse(response, 200, { ok: true, dataUrl: media.dataUrl, fileName: media.fileName, mimeType: media.mimeType });
+      } catch (error) {
+        jsonResponse(response, 400, { error: error instanceof Error ? error.message : "Nao foi possivel baixar o arquivo." });
       }
-
-      if (!message.rawMessage) {
-        jsonResponse(response, 400, { error: "A Evolution nao retornou dados suficientes para baixar este arquivo. Sincronize novamente." });
-        return;
-      }
-
-      const payload = await callEvolutionApi(database, `/chat/getBase64FromMediaMessage/${encodeURIComponent(instance)}`, {
-        method: "POST",
-        body: JSON.stringify({ message: message.rawMessage, convertToMp4: false }),
-      });
-      const base64 = payload?.base64 || payload?.data?.base64 || payload?.file?.base64 || payload?.media || "";
-      const mimeType = payload?.mimetype || payload?.mimeType || payload?.data?.mimetype || message.mimeType || "application/octet-stream";
-      const fileName = payload?.fileName || payload?.filename || message.fileName || `arquivo-${messageId}`;
-
-      if (!base64) {
-        jsonResponse(response, 400, { error: "Nao foi possivel obter o arquivo na Evolution." });
-        return;
-      }
-
-      const dataUrl = String(base64).startsWith("data:") ? base64 : `data:${mimeType};base64,${base64}`;
-      database.messages = (database.messages ?? []).map((item) =>
-        String(item.id) === messageId || String(item.evolutionMessageId) === messageId
-          ? { ...item, mediaUrl: dataUrl, mimeType, fileName }
-          : item,
-      );
-      await writeDatabase(database);
-
-      jsonResponse(response, 200, { ok: true, dataUrl, fileName, mimeType });
       return;
     }
 
@@ -1606,6 +1648,100 @@ async function routeRequest(request, response) {
       await writeDatabase(database);
 
       jsonResponse(response, 200, { ok: true, message });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/whatsapp/reaction") {
+      const body = await readJsonBody(request);
+      const database = await ensureDatabase();
+      const { instance } = getEvolutionConfig(database);
+      const messageId = String(body.messageId ?? "");
+      const emoji = String(body.emoji ?? "").trim();
+      const message = (database.messages ?? []).find(
+        (item) => String(item.id) === messageId || String(item.evolutionMessageId) === messageId,
+      );
+
+      if (!message || !emoji) {
+        jsonResponse(response, 400, { error: "Mensagem e emoji sao obrigatorios." });
+        return;
+      }
+
+      const key = message.rawMessage?.key || {
+        id: message.evolutionMessageId || message.id,
+        remoteJid: message.remoteJid || message.conversationId,
+        fromMe: message.from === "agent",
+      };
+
+      await tryEvolutionApi(database, `/message/sendReaction/${encodeURIComponent(instance)}`, {
+        method: "POST",
+        body: JSON.stringify({ reactionMessage: { key, text: emoji }, key, reaction: emoji }),
+      });
+
+      database.messages = (database.messages ?? []).map((item) =>
+        String(item.id) === messageId || String(item.evolutionMessageId) === messageId
+          ? { ...item, reactions: [{ emoji, fromMe: true, at: new Date().toISOString() }] }
+          : item,
+      );
+      await writeDatabase(database);
+
+      jsonResponse(response, 200, { ok: true, emoji });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/whatsapp/delete-message") {
+      const body = await readJsonBody(request);
+      const database = await ensureDatabase();
+      const { instance } = getEvolutionConfig(database);
+      const messageIds = Array.isArray(body.messageIds) ? body.messageIds.map(String) : [String(body.messageId ?? "")];
+      const messagesToDelete = (database.messages ?? []).filter((item) =>
+        messageIds.includes(String(item.id)) || messageIds.includes(String(item.evolutionMessageId)),
+      );
+
+      for (const message of messagesToDelete) {
+        const key = message.rawMessage?.key || {
+          id: message.evolutionMessageId || message.id,
+          remoteJid: message.remoteJid || message.conversationId,
+          fromMe: message.from === "agent",
+        };
+        await tryEvolutionApi(database, `/message/delete/${encodeURIComponent(instance)}`, {
+          method: "DELETE",
+          body: JSON.stringify({ id: key.id, remoteJid: key.remoteJid, fromMe: key.fromMe, key }),
+        });
+      }
+
+      database.messages = (database.messages ?? []).filter(
+        (item) => !messageIds.includes(String(item.id)) && !messageIds.includes(String(item.evolutionMessageId)),
+      );
+      await writeDatabase(database);
+
+      jsonResponse(response, 200, { ok: true, deleted: messagesToDelete.length });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/whatsapp/delete-conversation") {
+      const body = await readJsonBody(request);
+      const database = await ensureDatabase();
+      const { instance } = getEvolutionConfig(database);
+      const remoteJid = normalizeRemoteJid(body.remoteJid || body.conversationId);
+      const conversation = (database.conversations ?? []).find(
+        (item) => (item.remoteJid || item.id) === remoteJid || (item.aliases ?? []).includes(remoteJid),
+      );
+      const aliases = [remoteJid, conversation?.remoteJid, conversation?.id, ...(conversation?.aliases ?? [])].filter(Boolean);
+
+      await tryEvolutionApi(database, `/chat/deleteChat/${encodeURIComponent(instance)}`, {
+        method: "DELETE",
+        body: JSON.stringify({ remoteJid }),
+      });
+
+      database.conversations = (database.conversations ?? []).filter(
+        (item) => !aliases.includes(item.remoteJid) && !aliases.includes(item.id),
+      );
+      database.messages = (database.messages ?? []).filter(
+        (item) => !aliases.includes(item.remoteJid) && !aliases.includes(item.conversationId),
+      );
+      await writeDatabase(database);
+
+      jsonResponse(response, 200, { ok: true });
       return;
     }
 

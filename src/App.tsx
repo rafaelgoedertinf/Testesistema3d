@@ -85,6 +85,8 @@ type Message = {
   fileName?: string;
   mimeType?: string;
   status?: "pending" | "sent" | "failed";
+  reactions?: Array<{ emoji: string; fromMe?: boolean; at?: string }>;
+  replyTo?: { id: string | number; body: string; from: "lead" | "agent" | "system" };
 };
 
 type AgentSettings = {
@@ -444,7 +446,9 @@ function App() {
   const [newTag, setNewTag] = useState("");
   const [newLead, setNewLead] = useState({ name: "", state: "", phone: "" });
   const [messageDraft, setMessageDraft] = useState("");
-  const [selectedMessageId, setSelectedMessageId] = useState<string | number | null>(null);
+  const [selectedMessageIds, setSelectedMessageIds] = useState<Array<string | number>>([]);
+  const [replyToMessage, setReplyToMessage] = useState<Message | null>(null);
+  const selectedConversationRef = useRef<Conversation>(conversations[0]);
   const readAliasesRef = useRef<Set<string | number>>(new Set());
   const [isRecordingAudio, setIsRecordingAudio] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -742,6 +746,10 @@ function App() {
     processSendQueue();
   }
 
+  useEffect(() => {
+    selectedConversationRef.current = selectedConversation;
+  }, [selectedConversation]);
+
   function applyLocalReadState(conversationsToUpdate: Conversation[]) {
     return conversationsToUpdate.map((conversation) => {
       const ids = [conversation.id, conversation.remoteJid, ...(conversation.aliases ?? [])].filter((id): id is string | number => id !== undefined && id !== "");
@@ -836,16 +844,11 @@ function App() {
       });
       setConversationList(applyLocalReadState(result.conversations));
       setChatMessages((current) => mergeClientMessages(result.messages, current));
-      setSelectedConversation((current) =>
-        result.conversations.find((conversation) => conversationMatches(conversation, current)) ?? current,
-      );
-      if (selectedConversation?.id) {
-        const current = result.conversations.find((conversation) =>
-          [conversation.id, conversation.remoteJid, ...(conversation.aliases ?? [])].some((id) =>
-            [selectedConversation.id, selectedConversation.remoteJid, ...(selectedConversation.aliases ?? [])].includes(id),
-          ),
-        );
-        if (current) markConversationRead(current);
+      const selectedNow = selectedConversationRef.current;
+      const updatedSelected = result.conversations.find((conversation) => conversationMatches(conversation, selectedNow));
+      if (updatedSelected) {
+        setSelectedConversation({ ...updatedSelected, unread: 0 });
+        markConversationRead(updatedSelected);
       }
 
       if (!silent) {
@@ -876,6 +879,7 @@ function App() {
       timestamp: Date.now(),
       kind: "text",
       status: "pending",
+      replyTo: replyToMessage ? { id: replyToMessage.id, body: replyToMessage.body, from: replyToMessage.from } : undefined,
     };
 
     setChatMessages((current) => [...current, optimisticMessage]);
@@ -887,10 +891,16 @@ function App() {
       ),
     );
     setMessageDraft("");
+    setReplyToMessage(null);
     enqueueSend({
       localId,
       endpoint: "/api/whatsapp/send-text",
-      body: { remoteJid, conversationId: selectedConversation.id, text },
+      body: {
+        remoteJid,
+        conversationId: selectedConversation.id,
+        text,
+        replyTo: replyToMessage ? { id: replyToMessage.evolutionMessageId || replyToMessage.id } : undefined,
+      },
     });
   }
 
@@ -1269,8 +1279,10 @@ function App() {
             syncWhatsApp={syncWhatsApp}
             sendWhatsAppText={sendWhatsAppText}
             sendWhatsAppMedia={sendWhatsAppMedia}
-            selectedMessageId={selectedMessageId}
-            setSelectedMessageId={setSelectedMessageId}
+            selectedMessageIds={selectedMessageIds}
+            setSelectedMessageIds={setSelectedMessageIds}
+            replyToMessage={replyToMessage}
+            setReplyToMessage={setReplyToMessage}
             isRecordingAudio={isRecordingAudio}
             toggleAudioRecording={toggleAudioRecording}
             whatsAppSyncStatus={whatsAppSyncStatus}
@@ -1488,8 +1500,10 @@ function WhatsAppView({
   syncWhatsApp,
   sendWhatsAppText,
   sendWhatsAppMedia,
-  selectedMessageId,
-  setSelectedMessageId,
+  selectedMessageIds,
+  setSelectedMessageIds,
+  replyToMessage,
+  setReplyToMessage,
   isRecordingAudio,
   toggleAudioRecording,
   whatsAppSyncStatus,
@@ -1510,8 +1524,10 @@ function WhatsAppView({
   syncWhatsApp: () => void;
   sendWhatsAppText: () => void;
   sendWhatsAppMedia: (file: File, mediaType: "audio" | "video" | "image" | "document") => void;
-  selectedMessageId: string | number | null;
-  setSelectedMessageId: (id: string | number | null) => void;
+  selectedMessageIds: Array<string | number>;
+  setSelectedMessageIds: (ids: Array<string | number>) => void;
+  replyToMessage: Message | null;
+  setReplyToMessage: (message: Message | null) => void;
   isRecordingAudio: boolean;
   toggleAudioRecording: () => void;
   whatsAppSyncStatus: string;
@@ -1534,7 +1550,20 @@ function WhatsAppView({
     return conversations.length <= 3;
   });
 
-  const selectedMessage = visibleMessages.find((message) => message.id === selectedMessageId) ?? visibleMessages[visibleMessages.length - 1];
+  const selectedMessages = visibleMessages.filter((message) => selectedMessageIds.includes(message.id));
+  const selectedMessage = selectedMessages[0] ?? visibleMessages[visibleMessages.length - 1];
+
+  function toggleMessageSelection(message: Message) {
+    setSelectedMessageIds(
+      selectedMessageIds.includes(message.id)
+        ? selectedMessageIds.filter((id) => id !== message.id)
+        : [...selectedMessageIds, message.id],
+    );
+  }
+
+  function clearMessageSelection() {
+    setSelectedMessageIds([]);
+  }
 
   function triggerFile(mediaType: "audio" | "video" | "image" | "document") {
     const input = document.createElement("input");
@@ -1555,13 +1584,21 @@ function WhatsAppView({
   }
 
   async function copySelectedMessage() {
-    if (!selectedMessage?.body) return;
-    await navigator.clipboard?.writeText(selectedMessage.body);
+    const text = (selectedMessages.length ? selectedMessages : [selectedMessage]).filter(Boolean).map((message) => message.body).join("\n");
+    if (!text) return;
+    await navigator.clipboard?.writeText(text);
   }
 
   function forwardSelectedMessage() {
     if (!selectedMessage?.body) return;
     setMessageDraft(messageDraft || selectedMessage.body);
+    clearMessageSelection();
+  }
+
+  function replySelectedMessage() {
+    if (!selectedMessage) return;
+    setReplyToMessage(selectedMessage);
+    clearMessageSelection();
   }
 
   async function downloadMedia(message: Message) {
@@ -1579,6 +1616,35 @@ function WhatsAppView({
     } catch (error) {
       setMessageDraft((error instanceof Error ? error.message : "Nao foi possivel baixar o arquivo."));
     }
+  }
+
+  async function deleteSelectedMessages() {
+    const ids = selectedMessages.map((message) => message.evolutionMessageId || message.id);
+    if (!ids.length) return;
+    await apiRequest<{ ok: boolean }>("/api/whatsapp/delete-message", {
+      method: "POST",
+      token: localStorage.getItem("atendedor-2-token") ?? "",
+      body: JSON.stringify({ messageIds: ids }),
+    });
+    setSelectedMessageIds([]);
+  }
+
+  async function deleteCurrentConversation() {
+    await apiRequest<{ ok: boolean }>("/api/whatsapp/delete-conversation", {
+      method: "POST",
+      token: localStorage.getItem("atendedor-2-token") ?? "",
+      body: JSON.stringify({ remoteJid: selectedConversation.remoteJid, conversationId: selectedConversation.id }),
+    });
+  }
+
+  async function reactToSelectedMessage(emoji: string) {
+    if (!selectedMessage) return;
+    await apiRequest<{ ok: boolean }>("/api/whatsapp/reaction", {
+      method: "POST",
+      token: localStorage.getItem("atendedor-2-token") ?? "",
+      body: JSON.stringify({ messageId: selectedMessage.evolutionMessageId || selectedMessage.id, emoji }),
+    });
+    clearMessageSelection();
   }
 
   useEffect(() => {
@@ -1638,15 +1704,30 @@ function WhatsAppView({
             </span>
           </div>
           <div className="chat-score">{selectedConversation.score}%</div>
+          <button className="delete-conversation-button" onClick={deleteCurrentConversation} title="Excluir conversa">Excluir</button>
         </header>
+
+        {selectedMessageIds.length > 0 && (
+          <div className="message-selection-toolbar">
+            <strong>{selectedMessageIds.length} selecionada(s)</strong>
+            <button onClick={replySelectedMessage}>Responder</button>
+            <button onClick={forwardSelectedMessage}>Encaminhar</button>
+            <button onClick={copySelectedMessage}>Copiar</button>
+            <button onClick={() => reactToSelectedMessage("👍")}>👍</button>
+            <button onClick={() => reactToSelectedMessage("❤️")}>❤️</button>
+            <button onClick={() => reactToSelectedMessage("😂")}>😂</button>
+            <button className="danger" onClick={deleteSelectedMessages}>Excluir</button>
+            <button onClick={clearMessageSelection}>Cancelar</button>
+          </div>
+        )}
 
         <div className="messages">
           {visibleMessages.length ? (
             visibleMessages.map((message) => (
               <div
-                className={`message ${message.from} ${selectedMessageId === message.id ? "selected" : ""}`}
+                className={`message ${message.from} ${selectedMessageIds.includes(message.id) ? "selected" : ""}`}
                 key={message.id}
-                onClick={() => setSelectedMessageId(message.id)}
+                onClick={() => toggleMessageSelection(message)}
               >
                 <MessageContent message={message} onDownloadMedia={downloadMedia} />
                 <small>{message.time}{message.status === "pending" ? " • enviando" : message.status === "failed" ? " • falhou" : ""}</small>
@@ -1661,6 +1742,12 @@ function WhatsAppView({
           <div ref={messagesEndRef} />
         </div>
 
+        {replyToMessage && (
+          <div className="reply-preview">
+            <span>Respondendo: {replyToMessage.body}</span>
+            <button onClick={() => setReplyToMessage(null)}>x</button>
+          </div>
+        )}
         <footer className="composer">
           <div className="clip-menu-wrap">
             <button onClick={() => setIsAttachMenuOpen((current) => !current)} title="Anexar">
@@ -1743,7 +1830,9 @@ function MessageContent({ message, onDownloadMedia }: { message: Message; onDown
             </button>
           )
         )}
+        {message.replyTo && <small className="quoted-message">Resposta a: {message.replyTo.body}</small>}
         {message.body && <span>{message.body}</span>}
+        {message.reactions?.length ? <span className="message-reaction">{message.reactions.map((reaction) => reaction.emoji).join(" ")}</span> : null}
         {canOpenMedia && message.kind === "file" && (
           <button className="message-download" onClick={() => onDownloadMedia(message)}>Baixar</button>
         )}
@@ -1760,7 +1849,13 @@ function MessageContent({ message, onDownloadMedia }: { message: Message; onDown
     );
   }
 
-  return <span>{message.body}</span>;
+  return (
+    <span className="message-content">
+      {message.replyTo && <small className="quoted-message">Resposta a: {message.replyTo.body}</small>}
+      <span>{message.body}</span>
+      {message.reactions?.length ? <span className="message-reaction">{message.reactions.map((reaction) => reaction.emoji).join(" ")}</span> : null}
+    </span>
+  );
 }
 
 function LeadsView({
