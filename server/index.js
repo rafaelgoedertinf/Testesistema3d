@@ -711,12 +711,25 @@ function safeFileName(value, fallback = "arquivo") {
   return String(value || fallback).replace(/[\\/:*?"<>|]+/g, "-").slice(0, 180) || fallback;
 }
 
+function asciiFileName(value, fallback = "arquivo") {
+  return safeFileName(value, fallback)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\x20-\x7E]/g, "_");
+}
+
+function contentDispositionFileName(fileName) {
+  const safe = safeFileName(fileName);
+  const ascii = asciiFileName(safe);
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(safe)}`;
+}
+
 function binaryResponse(response, { base64, mimeType, fileName }) {
   const buffer = Buffer.from(stripDataUrl(base64), "base64");
   response.writeHead(200, {
     "Content-Type": mimeType || "application/octet-stream",
     "Content-Length": buffer.length,
-    "Content-Disposition": `attachment; filename="${safeFileName(fileName)}"`,
+    "Content-Disposition": contentDispositionFileName(fileName),
     "Cache-Control": "private, max-age=300",
     "Access-Control-Allow-Origin": "*",
   });
