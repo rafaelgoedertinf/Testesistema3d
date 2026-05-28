@@ -1285,6 +1285,7 @@ function App() {
             isRecordingAudio={isRecordingAudio}
             toggleAudioRecording={toggleAudioRecording}
             whatsAppSyncStatus={whatsAppSyncStatus}
+            setWhatsAppSyncStatus={setWhatsAppSyncStatus}
             whatsAppBusy={whatsAppBusy}
             isNewConversationOpen={isNewConversationOpen}
             setIsNewConversationOpen={setIsNewConversationOpen}
@@ -1504,6 +1505,7 @@ function WhatsAppView({
   isRecordingAudio,
   toggleAudioRecording,
   whatsAppSyncStatus,
+  setWhatsAppSyncStatus,
   whatsAppBusy,
   isNewConversationOpen,
   setIsNewConversationOpen,
@@ -1526,6 +1528,7 @@ function WhatsAppView({
   isRecordingAudio: boolean;
   toggleAudioRecording: () => void;
   whatsAppSyncStatus: string;
+  setWhatsAppSyncStatus: (value: string) => void;
   whatsAppBusy: "" | "sync" | "send";
   isNewConversationOpen: boolean;
   setIsNewConversationOpen: (value: boolean) => void;
@@ -1604,18 +1607,30 @@ function WhatsAppView({
 
   async function downloadMedia(message: Message) {
     try {
-      const result = await apiRequest<{ ok: boolean; dataUrl: string; fileName: string; mimeType: string }>(
-        `/api/whatsapp/media/${encodeURIComponent(String(message.evolutionMessageId || message.id))}`,
-        { token: localStorage.getItem("atendedor-2-token") ?? "" },
+      const token = localStorage.getItem("atendedor-2-token") ?? "";
+      const response = await fetch(
+        `${API_BASE_URL}/api/whatsapp/media/${encodeURIComponent(String(message.evolutionMessageId || message.id))}/download`,
+        { headers: token ? { Authorization: `Bearer ${token}` } : undefined },
       );
+
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error || `Download retornou ${response.status}`);
+      }
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const disposition = response.headers.get("content-disposition") || "";
+      const match = disposition.match(/filename="?([^";]+)"?/i);
       const anchor = document.createElement("a");
-      anchor.href = result.dataUrl;
-      anchor.download = result.fileName || message.fileName || "arquivo";
+      anchor.href = url;
+      anchor.download = decodeURIComponent(match?.[1] || message.fileName || "arquivo");
       document.body.appendChild(anchor);
       anchor.click();
       anchor.remove();
+      URL.revokeObjectURL(url);
     } catch (error) {
-      setMessageDraft((error instanceof Error ? error.message : "Nao foi possivel baixar o arquivo."));
+      setWhatsAppSyncStatus(error instanceof Error ? error.message : "Nao foi possivel baixar o arquivo.");
     }
   }
 

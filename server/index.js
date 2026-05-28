@@ -723,6 +723,47 @@ function binaryResponse(response, { base64, mimeType, fileName }) {
   response.end(buffer);
 }
 
+function getBase64FromPayload(payload) {
+  return (
+    payload?.base64 ||
+    payload?.data?.base64 ||
+    payload?.file?.base64 ||
+    payload?.media ||
+    payload?.data ||
+    ""
+  );
+}
+
+async function getEvolutionMediaPayload(database, instance, message) {
+  const key = message.rawMessage?.key || {
+    id: message.evolutionMessageId || message.id,
+    remoteJid: message.remoteJid || message.conversationId,
+    fromMe: message.from === "agent",
+  };
+  const requestBodies = [
+    { message: { key }, convertToMp4: message.kind === "video" },
+    { message: { key: { id: key.id } }, convertToMp4: message.kind === "video" },
+    { message: message.rawMessage, convertToMp4: message.kind === "video" },
+  ];
+
+  let lastError;
+  for (const body of requestBodies) {
+    try {
+      const payload = await callEvolutionApi(database, `/chat/getBase64FromMediaMessage/${encodeURIComponent(instance)}`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      const rawBase64 = getBase64FromPayload(payload);
+      if (rawBase64) return { payload, rawBase64 };
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  if (lastError) throw lastError;
+  return { payload: {}, rawBase64: "" };
+}
+
 async function resolveMediaPayload(database, instance, message) {
   if (message.mediaUrl?.startsWith("data:")) {
     const parsed = parseDataUrl(message.mediaUrl, message.mimeType || "application/octet-stream");
@@ -734,6 +775,19 @@ async function resolveMediaPayload(database, instance, message) {
     };
   }
 
+  // WhatsApp CDN URLs usually point to encrypted media. Prefer Evolution decryption whenever possible.
+  if (message.rawMessage || message.evolutionMessageId || message.id) {
+    const { payload, rawBase64 } = await getEvolutionMediaPayload(database, instance, message);
+    const parsed = parseDataUrl(
+      rawBase64,
+      payload?.mimetype || payload?.mimeType || payload?.data?.mimetype || message.mimeType || "application/octet-stream",
+    );
+    const fileName = payload?.fileName || payload?.filename || message.fileName || `arquivo-${message.evolutionMessageId || message.id}`;
+    if (parsed.base64) {
+      return { base64: parsed.base64, mimeType: parsed.mimeType, fileName, dataUrl: `data:${parsed.mimeType};base64,${parsed.base64}` };
+    }
+  }
+
   if (message.mediaUrl?.startsWith("http")) {
     const mediaResponse = await fetch(message.mediaUrl);
     if (!mediaResponse.ok) throw new Error(`Download HTTP retornou ${mediaResponse.status}`);
@@ -743,20 +797,7 @@ async function resolveMediaPayload(database, instance, message) {
     return { base64, mimeType, fileName: message.fileName || "arquivo", dataUrl: `data:${mimeType};base64,${base64}` };
   }
 
-  if (!message.rawMessage) {
-    throw new Error("A Evolution nao retornou dados suficientes para baixar este arquivo. Sincronize novamente.");
-  }
-
-  const payload = await callEvolutionApi(database, `/chat/getBase64FromMediaMessage/${encodeURIComponent(instance)}`, {
-    method: "POST",
-    body: JSON.stringify({ message: message.rawMessage, convertToMp4: false }),
-  });
-  const rawBase64 = payload?.base64 || payload?.data?.base64 || payload?.file?.base64 || payload?.media || "";
-  const parsed = parseDataUrl(rawBase64, payload?.mimetype || payload?.mimeType || payload?.data?.mimetype || message.mimeType || "application/octet-stream");
-  const fileName = payload?.fileName || payload?.filename || message.fileName || "arquivo";
-
-  if (!parsed.base64) throw new Error("Nao foi possivel obter o arquivo na Evolution.");
-  return { base64: parsed.base64, mimeType: parsed.mimeType, fileName, dataUrl: `data:${parsed.mimeType};base64,${parsed.base64}` };
+  throw new Error("A Evolution nao retornou dados suficientes para baixar este arquivo. Sincronize novamente.");
 }
 
 function getProfilePicUrl(source, contactInfo = {}) {
@@ -1757,16 +1798,24 @@ async function routeRequest(request, response) {
         messageIds.includes(String(item.id)) || messageIds.includes(String(item.evolutionMessageId)),
       );
 
+      const deleteResults = [];
       for (const message of messagesToDelete) {
         const key = message.rawMessage?.key || {
           id: message.evolutionMessageId || message.id,
           remoteJid: message.remoteJid || message.conversationId,
           fromMe: message.from === "agent",
+          participant: message.rawMessage?.key?.participant,
         };
-        await tryEvolutionApi(database, `/message/delete/${encodeURIComponent(instance)}`, {
+        const result = await tryEvolutionApi(database, `/chat/deleteMessageForEveryone/${encodeURIComponent(instance)}`, {
           method: "DELETE",
-          body: JSON.stringify({ id: key.id, remoteJid: key.remoteJid, fromMe: key.fromMe, key }),
+          body: JSON.stringify({
+            id: key.id,
+            remoteJid: key.remoteJid,
+            fromMe: key.fromMe,
+            participant: key.participant,
+          }),
         });
+        deleteResults.push({ id: key.id, result });
       }
 
       database.messages = (database.messages ?? []).filter(
@@ -1774,7 +1823,7 @@ async function routeRequest(request, response) {
       );
       await writeDatabase(database);
 
-      jsonResponse(response, 200, { ok: true, deleted: messagesToDelete.length });
+      jsonResponse(response, 200, { ok: true, deleted: messagesToDelete.length, deleteResults });
       return;
     }
 
@@ -1788,10 +1837,17 @@ async function routeRequest(request, response) {
       );
       const aliases = [remoteJid, conversation?.remoteJid, conversation?.id, ...(conversation?.aliases ?? [])].filter(Boolean);
 
-      await tryEvolutionApi(database, `/chat/deleteChat/${encodeURIComponent(instance)}`, {
-        method: "DELETE",
-        body: JSON.stringify({ remoteJid }),
-      });
+      const deleteAttempts = [];
+      for (const path of [
+        `/chat/deleteChat/${encodeURIComponent(instance)}`,
+        `/chat/delete/${encodeURIComponent(instance)}`,
+        `/chat/removeChat/${encodeURIComponent(instance)}`,
+      ]) {
+        deleteAttempts.push(await tryEvolutionApi(database, path, {
+          method: "DELETE",
+          body: JSON.stringify({ remoteJid, jid: remoteJid }),
+        }));
+      }
 
       database.conversations = (database.conversations ?? []).filter(
         (item) => !aliases.includes(item.remoteJid) && !aliases.includes(item.id),
@@ -1801,7 +1857,7 @@ async function routeRequest(request, response) {
       );
       await writeDatabase(database);
 
-      jsonResponse(response, 200, { ok: true });
+      jsonResponse(response, 200, { ok: true, deleteAttempts });
       return;
     }
 
