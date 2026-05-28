@@ -861,7 +861,21 @@ function getRecipientCandidates(remoteJid, phone) {
   return Array.from(new Set(candidates.filter(Boolean)));
 }
 
-async function sendEvolutionText(database, instance, remoteJid, phone, text) {
+function buildQuotedPayload(message) {
+  if (!message) return undefined;
+  return {
+    key: {
+      id: message.evolutionMessageId || message.id,
+      remoteJid: message.remoteJid || message.conversationId,
+      fromMe: message.from === "agent",
+    },
+    message: {
+      conversation: message.body || message.fileName || "Mensagem",
+    },
+  };
+}
+
+async function sendEvolutionText(database, instance, remoteJid, phone, text, quotedMessage) {
   const candidates = getRecipientCandidates(remoteJid, phone);
   const errors = [];
 
@@ -869,7 +883,11 @@ async function sendEvolutionText(database, instance, remoteJid, phone, text) {
     try {
       const payload = await callEvolutionApi(database, `/message/sendText/${encodeURIComponent(instance)}`, {
         method: "POST",
-        body: JSON.stringify({ number, text }),
+        body: JSON.stringify({
+          number,
+          text,
+          ...(quotedMessage ? { quoted: buildQuotedPayload(quotedMessage) } : {}),
+        }),
       });
       return { payload, number };
     } catch (error) {
@@ -880,7 +898,7 @@ async function sendEvolutionText(database, instance, remoteJid, phone, text) {
   throw new Error(`Nao foi possivel enviar pela Evolution. Tentativas: ${errors.join(" | ")}`);
 }
 
-async function sendEvolutionMedia(database, instance, remoteJid, phone, media) {
+async function sendEvolutionMedia(database, instance, remoteJid, phone, media, quotedMessage) {
   const candidates = getRecipientCandidates(remoteJid, phone);
   const errors = [];
   const mediatype = media.mediaType || "document";
@@ -896,6 +914,7 @@ async function sendEvolutionMedia(database, instance, remoteJid, phone, media) {
           caption: media.caption || "",
           media: stripDataUrl(media.data),
           fileName: media.fileName || "arquivo",
+          ...(quotedMessage ? { quoted: buildQuotedPayload(quotedMessage) } : {}),
         }),
       });
       return { payload, number };
@@ -940,7 +959,7 @@ function dedupeConversations(conversations) {
   return Array.from(map.values());
 }
 
-async function sendEvolutionAudio(database, instance, remoteJid, phone, media) {
+async function sendEvolutionAudio(database, instance, remoteJid, phone, media, quotedMessage) {
   const candidates = getRecipientCandidates(remoteJid, phone);
   const errors = [];
 
@@ -953,6 +972,7 @@ async function sendEvolutionAudio(database, instance, remoteJid, phone, media) {
           audio: stripDataUrl(media.data),
           delay: 800,
           encoding: true,
+          ...(quotedMessage ? { quoted: buildQuotedPayload(quotedMessage) } : {}),
         }),
       });
       return { payload, number };
@@ -961,7 +981,7 @@ async function sendEvolutionAudio(database, instance, remoteJid, phone, media) {
     }
   }
 
-  return sendEvolutionMedia(database, instance, remoteJid, phone, { ...media, mediaType: "audio" });
+  return sendEvolutionMedia(database, instance, remoteJid, phone, { ...media, mediaType: "audio" }, quotedMessage);
 }
 
 function normalizeDisplayName(value) {
@@ -1623,7 +1643,10 @@ async function routeRequest(request, response) {
       const conversation = (database.conversations ?? []).find(
         (item) => (item.remoteJid || item.id) === remoteJid || String(item.id) === String(body.conversationId ?? ""),
       );
-      const { payload } = await sendEvolutionText(database, instance, remoteJid, conversation?.phone, text);
+      const quotedMessage = body.replyTo?.id
+        ? (database.messages ?? []).find((item) => String(item.id) === String(body.replyTo.id) || String(item.evolutionMessageId) === String(body.replyTo.id))
+        : undefined;
+      const { payload } = await sendEvolutionText(database, instance, remoteJid, conversation?.phone, text, quotedMessage);
 
       const timestamp = Date.now();
       const message = {
@@ -1637,6 +1660,7 @@ async function routeRequest(request, response) {
         timestamp,
         kind: "text",
         source: "evolution",
+        replyTo: quotedMessage ? { id: quotedMessage.id, body: quotedMessage.body, from: quotedMessage.from } : undefined,
       };
 
       database.messages = mergeByKey(database.messages ?? [], [message], (item) => item.evolutionMessageId || item.id);
@@ -1648,6 +1672,42 @@ async function routeRequest(request, response) {
       await writeDatabase(database);
 
       jsonResponse(response, 200, { ok: true, message });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/whatsapp/forward") {
+      const body = await readJsonBody(request);
+      const database = await ensureDatabase();
+      const { instance } = getEvolutionConfig(database);
+      const messageId = String(body.messageId ?? "");
+      const targetRemoteJid = normalizeRemoteJid(body.targetRemoteJid);
+      const targetConversation = (database.conversations ?? []).find(
+        (item) => (item.remoteJid || item.id) === targetRemoteJid || (item.aliases ?? []).includes(targetRemoteJid),
+      );
+      const sourceMessage = (database.messages ?? []).find(
+        (item) => String(item.id) === messageId || String(item.evolutionMessageId) === messageId,
+      );
+
+      if (!sourceMessage || !targetRemoteJid) {
+        jsonResponse(response, 400, { error: "Mensagem e conversa de destino sao obrigatorias." });
+        return;
+      }
+
+      let sent;
+      if (sourceMessage.mediaUrl || sourceMessage.fileName) {
+        const media = await resolveMediaPayload(database, instance, sourceMessage);
+        sent = await sendEvolutionMedia(database, instance, targetRemoteJid, targetConversation?.phone, {
+          data: media.dataUrl,
+          mimeType: media.mimeType,
+          fileName: media.fileName,
+          caption: sourceMessage.body,
+          mediaType: sourceMessage.kind === "video" ? "video" : sourceMessage.kind === "audio" ? "audio" : sourceMessage.mimeType?.startsWith("image/") ? "image" : "document",
+        });
+      } else {
+        sent = await sendEvolutionText(database, instance, targetRemoteJid, targetConversation?.phone, sourceMessage.body);
+      }
+
+      jsonResponse(response, 200, { ok: true, payload: sent.payload });
       return;
     }
 
@@ -1674,7 +1734,7 @@ async function routeRequest(request, response) {
 
       await tryEvolutionApi(database, `/message/sendReaction/${encodeURIComponent(instance)}`, {
         method: "POST",
-        body: JSON.stringify({ reactionMessage: { key, text: emoji }, key, reaction: emoji }),
+        body: JSON.stringify({ key, reaction: emoji }),
       });
 
       database.messages = (database.messages ?? []).map((item) =>
@@ -1766,9 +1826,12 @@ async function routeRequest(request, response) {
         caption: body.caption,
         mediaType: body.mediaType,
       };
+      const quotedMessage = body.replyTo?.id
+        ? (database.messages ?? []).find((item) => String(item.id) === String(body.replyTo.id) || String(item.evolutionMessageId) === String(body.replyTo.id))
+        : undefined;
       const { payload } = body.mediaType === "audio"
-        ? await sendEvolutionAudio(database, instance, remoteJid, conversation?.phone, mediaPayload)
-        : await sendEvolutionMedia(database, instance, remoteJid, conversation?.phone, mediaPayload);
+        ? await sendEvolutionAudio(database, instance, remoteJid, conversation?.phone, mediaPayload, quotedMessage)
+        : await sendEvolutionMedia(database, instance, remoteJid, conversation?.phone, mediaPayload, quotedMessage);
 
       const timestamp = Date.now();
       const message = {

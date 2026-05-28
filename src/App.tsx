@@ -1538,12 +1538,21 @@ function WhatsAppView({
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const [isAttachMenuOpen, setIsAttachMenuOpen] = useState(false);
   const [openMessageMenuId, setOpenMessageMenuId] = useState<string | number | null>(null);
+  const [forwardMessageTarget, setForwardMessageTarget] = useState<Message | null>(null);
+  const [conversationFilter, setConversationFilter] = useState<"all" | "unread" | "favorites" | "groups">("all");
   const visibleMessages = messages.filter((message) => {
     if (message.remoteJid || message.conversationId) {
       return selectedAliases.has(message.remoteJid ?? message.conversationId ?? "");
     }
 
     return conversations.length <= 3;
+  });
+
+  const filteredConversations = conversations.filter((conversation) => {
+    if (conversationFilter === "unread") return conversation.unread > 0;
+    if (conversationFilter === "groups") return String(conversation.remoteJid || conversation.id).includes("@g.us");
+    if (conversationFilter === "favorites") return false;
+    return true;
   });
 
   function triggerFile(mediaType: "audio" | "video" | "image" | "document") {
@@ -1571,9 +1580,21 @@ function WhatsAppView({
   }
 
   function forwardMessage(message: Message) {
-    if (!message.body) return;
-    setMessageDraft(messageDraft || message.body);
+    setForwardMessageTarget(message);
     setOpenMessageMenuId(null);
+  }
+
+  async function forwardToConversation(conversation: Conversation) {
+    if (!forwardMessageTarget) return;
+    await apiRequest<{ ok: boolean }>("/api/whatsapp/forward", {
+      method: "POST",
+      token: localStorage.getItem("atendedor-2-token") ?? "",
+      body: JSON.stringify({
+        messageId: forwardMessageTarget.evolutionMessageId || forwardMessageTarget.id,
+        targetRemoteJid: conversation.remoteJid || conversation.id,
+      }),
+    });
+    setForwardMessageTarget(null);
   }
 
   function replyMessage(message: Message) {
@@ -1642,6 +1663,22 @@ function WhatsAppView({
             </button>
           </div>
         </div>
+        <div className="conversation-filters">
+          {[
+            ["all", "Tudo"],
+            ["unread", "Não lidas"],
+            ["favorites", "Favoritas"],
+            ["groups", "Grupos"],
+          ].map(([id, label]) => (
+            <button
+              key={id}
+              className={conversationFilter === id ? "active" : ""}
+              onClick={() => setConversationFilter(id as typeof conversationFilter)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
         {whatsAppSyncStatus && <div className="sync-status">{whatsAppSyncStatus}</div>}
         {isNewConversationOpen && (
           <form className="new-conversation-form" onSubmit={startNewConversation}>
@@ -1654,7 +1691,7 @@ function WhatsAppView({
             <button type="submit">Iniciar</button>
           </form>
         )}
-        {conversations.map((conversation) => (
+        {filteredConversations.map((conversation) => (
           <button
             key={conversation.id}
             className={conversation.id === selectedConversation.id ? "conversation active" : "conversation"}
@@ -1787,6 +1824,30 @@ function WhatsAppView({
           Criar tarefa no CRM
         </button>
       </aside>
+
+      {forwardMessageTarget && (
+        <div className="forward-modal">
+          <div className="forward-dialog">
+            <header>
+              <strong>Encaminhar mensagem</strong>
+              <button onClick={() => setForwardMessageTarget(null)}>x</button>
+            </header>
+            <div className="forward-list">
+              {conversations.map((conversation) => (
+                <button key={conversation.id} onClick={() => forwardToConversation(conversation)}>
+                  <div className="avatar small">
+                    {conversation.profilePicUrl ? <img src={conversation.profilePicUrl} alt={conversation.name} /> : (conversation.name || conversation.phone).charAt(0)}
+                  </div>
+                  <span>
+                    <strong>{conversation.name || conversation.phone}</strong>
+                    <small>{conversation.phone}</small>
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
