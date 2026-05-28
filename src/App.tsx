@@ -58,6 +58,7 @@ type Conversation = {
   remoteJid?: string;
   aliases?: string[];
   lastReadAt?: string;
+  archived?: boolean;
   name: string;
   phone: string;
   number?: string;
@@ -1542,7 +1543,7 @@ function WhatsAppView({
   const [isAttachMenuOpen, setIsAttachMenuOpen] = useState(false);
   const [openMessageMenuId, setOpenMessageMenuId] = useState<string | number | null>(null);
   const [forwardMessageTarget, setForwardMessageTarget] = useState<Message | null>(null);
-  const [conversationFilter, setConversationFilter] = useState<"all" | "unread" | "favorites" | "groups">("all");
+  const [conversationFilter, setConversationFilter] = useState<"all" | "unread" | "favorites" | "groups" | "archived">("all");
   const visibleMessages = messages.filter((message) => {
     if (message.remoteJid || message.conversationId) {
       return selectedAliases.has(message.remoteJid ?? message.conversationId ?? "");
@@ -1552,6 +1553,8 @@ function WhatsAppView({
   });
 
   const filteredConversations = conversations.filter((conversation) => {
+    if (conversationFilter === "archived") return Boolean(conversation.archived);
+    if (conversation.archived) return false;
     if (conversationFilter === "unread") return conversation.unread > 0;
     if (conversationFilter === "groups") return String(conversation.remoteJid || conversation.id).includes("@g.us");
     if (conversationFilter === "favorites") return false;
@@ -1652,6 +1655,14 @@ function WhatsAppView({
     });
   }
 
+  async function archiveCurrentConversation(archive: boolean) {
+    await apiRequest<{ ok: boolean }>("/api/whatsapp/archive-conversation", {
+      method: "POST",
+      token: localStorage.getItem("atendedor-2-token") ?? "",
+      body: JSON.stringify({ remoteJid: selectedConversation.remoteJid, conversationId: selectedConversation.id, archive }),
+    });
+  }
+
   async function reactToMessage(message: Message, emoji: string) {
     await apiRequest<{ ok: boolean }>("/api/whatsapp/reaction", {
       method: "POST",
@@ -1684,6 +1695,7 @@ function WhatsAppView({
             ["unread", "Não lidas"],
             ["favorites", "Favoritas"],
             ["groups", "Grupos"],
+            ["archived", "Arquivadas"],
           ].map(([id, label]) => (
             <button
               key={id}
@@ -1734,6 +1746,9 @@ function WhatsAppView({
             </span>
           </div>
           <div className="chat-score">{selectedConversation.score}%</div>
+          <button className="archive-conversation-button" onClick={() => archiveCurrentConversation(!selectedConversation.archived)} title="Arquivar conversa">
+            {selectedConversation.archived ? "Desarquivar" : "Arquivar"}
+          </button>
           <button className="delete-conversation-button" onClick={deleteCurrentConversation} title="Excluir conversa">Excluir</button>
         </header>
 

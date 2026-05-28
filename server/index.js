@@ -915,6 +915,34 @@ function getRecipientCandidates(remoteJid, phone) {
   return Array.from(new Set(candidates.filter(Boolean)));
 }
 
+function getLastMessageForChat(database, remoteJid) {
+  const aliases = new Set([remoteJid]);
+  const conversation = (database.conversations ?? []).find(
+    (item) => (item.remoteJid || item.id) === remoteJid || (item.aliases ?? []).includes(remoteJid),
+  );
+  for (const alias of conversation?.aliases ?? []) aliases.add(alias);
+  if (conversation?.remoteJid) aliases.add(conversation.remoteJid);
+  if (conversation?.id) aliases.add(conversation.id);
+
+  return [...(database.messages ?? [])]
+    .filter((message) => aliases.has(message.remoteJid) || aliases.has(message.conversationId))
+    .sort((a, b) => Number(b.timestamp ?? 0) - Number(a.timestamp ?? 0))[0];
+}
+
+async function archiveEvolutionChat(database, instance, remoteJid, archive) {
+  const lastMessage = getLastMessageForChat(database, remoteJid);
+  const key = lastMessage?.rawMessage?.key || {
+    remoteJid,
+    fromMe: Boolean(lastMessage?.from === "agent"),
+    id: lastMessage?.evolutionMessageId || lastMessage?.id || `archive-${Date.now()}`,
+  };
+
+  return callEvolutionApi(database, `/chat/archiveChat/${encodeURIComponent(instance)}`, {
+    method: "POST",
+    body: JSON.stringify({ chat: remoteJid, archive, lastMessage: { key } }),
+  });
+}
+
 function buildQuotedPayload(message) {
   if (!message) return undefined;
   return {
@@ -1840,6 +1868,38 @@ async function routeRequest(request, response) {
       return;
     }
 
+    if (request.method === "POST" && url.pathname === "/api/whatsapp/archive-conversation") {
+      const body = await readJsonBody(request);
+      const database = await ensureDatabase();
+      const { instance } = getEvolutionConfig(database);
+      const remoteJid = normalizeRemoteJid(body.remoteJid || body.conversationId);
+      const archive = body.archive !== false;
+
+      if (!remoteJid) {
+        jsonResponse(response, 400, { error: "Conversa obrigatoria." });
+        return;
+      }
+
+      const archiveResult = await tryEvolutionApi(database, `/chat/archiveChat/${encodeURIComponent(instance)}`, {
+        method: "POST",
+        body: JSON.stringify({
+          chat: remoteJid,
+          archive,
+          lastMessage: { key: (getLastMessageForChat(database, remoteJid)?.rawMessage?.key || { remoteJid, fromMe: true, id: `archive-${Date.now()}` }) },
+        }),
+      });
+
+      database.conversations = (database.conversations ?? []).map((conversation) =>
+        (conversation.remoteJid || conversation.id) === remoteJid || (conversation.aliases ?? []).includes(remoteJid)
+          ? { ...conversation, archived: archive }
+          : conversation,
+      );
+      await writeDatabase(database);
+
+      jsonResponse(response, 200, { ok: true, archived: archive, archiveResult });
+      return;
+    }
+
     if (request.method === "POST" && url.pathname === "/api/whatsapp/delete-conversation") {
       const body = await readJsonBody(request);
       const database = await ensureDatabase();
@@ -1850,17 +1910,14 @@ async function routeRequest(request, response) {
       );
       const aliases = [remoteJid, conversation?.remoteJid, conversation?.id, ...(conversation?.aliases ?? [])].filter(Boolean);
 
-      const deleteAttempts = [];
-      for (const path of [
-        `/chat/deleteChat/${encodeURIComponent(instance)}`,
-        `/chat/delete/${encodeURIComponent(instance)}`,
-        `/chat/removeChat/${encodeURIComponent(instance)}`,
-      ]) {
-        deleteAttempts.push(await tryEvolutionApi(database, path, {
-          method: "DELETE",
-          body: JSON.stringify({ remoteJid, jid: remoteJid }),
-        }));
-      }
+      const archiveResult = await tryEvolutionApi(database, `/chat/archiveChat/${encodeURIComponent(instance)}`, {
+        method: "POST",
+        body: JSON.stringify({
+          chat: remoteJid,
+          archive: true,
+          lastMessage: { key: (getLastMessageForChat(database, remoteJid)?.rawMessage?.key || { remoteJid, fromMe: true, id: `archive-${Date.now()}` }) },
+        }),
+      });
 
       database.conversations = (database.conversations ?? []).filter(
         (item) => !aliases.includes(item.remoteJid) && !aliases.includes(item.id),
@@ -1870,7 +1927,7 @@ async function routeRequest(request, response) {
       );
       await writeDatabase(database);
 
-      jsonResponse(response, 200, { ok: true, deleteAttempts });
+      jsonResponse(response, 200, { ok: true, archiveResult });
       return;
     }
 

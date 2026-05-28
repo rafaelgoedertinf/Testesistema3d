@@ -1721,3 +1721,13 @@ textarea:focus {
 .forward-list small {
   color: var(--muted);
 }
+
+.archive-conversation-button {
+  padding: 0.45rem 0.7rem;
+  color: #fde68a;
+  border: 1px solid rgba(251, 191, 36, 0.28);
+  border-radius: 999px;
+  background: rgba(251, 191, 36, 0.1);
+  font-size: 0.78rem;
+  font-weight: 900;
+}
